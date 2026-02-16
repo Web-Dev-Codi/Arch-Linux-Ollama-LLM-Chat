@@ -18,36 +18,62 @@ It supports streaming responses, configurable keybinds, and Hyprland/Ghostty-fri
 ## Requirements
 
 - Python 3.11+
-- Ollama daemon available locally
+- Ollama installed and available in `PATH`
+- Ollama daemon available locally (`ollama serve`)
 
 ## Installation
 
-### Development install
+### Quick start (recommended)
 
 ```bash
+git clone https://github.com/brian/Arch-Linux-Ollama-LLM-Chat.git
+cd Arch-Linux-Ollama-LLM-Chat
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 ```
 
-### Run
+### Install modes
 
-```bash
-ollama-chat
-```
+- **Standard use**: `pip install -e .`
+- **Contributor/dev mode**: `pip install -e '.[dev]'`
 
-or
+## Run and use the app
 
-```bash
-python -m ollama_chat
-```
-
-## Ollama setup
-
-Start Ollama and ensure the selected model is available:
+### 1) Start Ollama and pull a model
 
 ```bash
 ollama serve
 ollama pull llama3.2
 ```
+
+### 2) Optional: create your config file
+
+Defaults are loaded automatically, but you can start from the example:
+
+```bash
+mkdir -p ~/.config/ollama-chat
+cp config.example.toml ~/.config/ollama-chat/config.toml
+```
+
+### 3) Launch the TUI
+
+```bash
+ollama-chat
+```
+
+Alternative entrypoint:
+
+```bash
+python -m ollama_chat
+```
+
+### 4) Basic workflow
+
+- Type your prompt in the input field.
+- Press `ctrl+enter` to send.
+- Use `ctrl+n` to start a new conversation.
+- Use `ctrl+q` to quit.
 
 ## Configuration
 
@@ -174,7 +200,7 @@ Categories=Utility;TerminalEmulator;Development;
 Run tests:
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py'
+pytest -q
 ```
 
 ## Troubleshooting
