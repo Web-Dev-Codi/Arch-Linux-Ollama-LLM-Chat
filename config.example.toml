@@ -1,0 +1,49 @@
+[app]
+title = "Ollama Chat"
+class = "ollama-chat-tui"
+connection_check_interval_seconds = 15
+
+[ollama]
+host = "http://localhost:11434"
+model = "llama3.2"
+timeout = 120
+system_prompt = "You are a helpful assistant."
+max_history_messages = 200
+max_context_tokens = 4096
+
+[ui]
+font_size = 14
+background_color = "#1a1b26"
+user_message_color = "#7aa2f7"
+assistant_message_color = "#9ece6a"
+border_color = "#565f89"
+show_timestamps = true
+stream_chunk_size = 8
+
+[keybinds]
+send_message = "ctrl+enter"
+new_conversation = "ctrl+n"
+quit = "ctrl+q"
+scroll_up = "ctrl+k"
+scroll_down = "ctrl+j"
+toggle_model_picker = "ctrl+m"
+save_conversation = "ctrl+s"
+load_conversation = "ctrl+l"
+export_conversation = "ctrl+e"
+search_messages = "ctrl+f"
+copy_last_message = "ctrl+y"
+
+[security]
+allow_remote_hosts = false
+allowed_hosts = ["localhost", "127.0.0.1", "::1"]
+
+[logging]
+level = "INFO"
+structured = true
+log_to_file = false
+log_file_path = "~/.local/state/ollama-chat/app.log"
+
+[persistence]
+enabled = false
+directory = "~/.local/state/ollama-chat/conversations"
+metadata_path = "~/.local/state/ollama-chat/conversations/index.json"

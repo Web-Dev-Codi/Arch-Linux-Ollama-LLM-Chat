@@ -1,0 +1,297 @@
+"""Configuration loading and validation for the Ollama chat TUI."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import logging
+import os
+from pathlib import Path
+import re
+from typing import Any
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from .exceptions import ConfigValidationError
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - compatibility path for older Python.
+    import tomli as tomllib  # type: ignore[no-redef]
+
+LOGGER = logging.getLogger(__name__)
+
+CONFIG_DIR = Path.home() / ".config" / "ollama-chat"
+CONFIG_PATH = CONFIG_DIR / "config.toml"
+
+HEX_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
+VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+
+
+class AppConfig(BaseModel):
+    """Application metadata and terminal integration options."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    title: str = "Ollama Chat"
+    window_class: str = Field(default="ollama-chat-tui", alias="class")
+    connection_check_interval_seconds: int = Field(default=15, ge=1, le=3600)
+
+    @field_validator("title", "window_class", mode="before")
+    @classmethod
+    def _validate_non_empty_string(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Expected a string value.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("String value must not be empty.")
+        return normalized
+
+
+class OllamaConfig(BaseModel):
+    """Ollama endpoint and model settings."""
+
+    host: str = "http://localhost:11434"
+    model: str = "llama3.2"
+    timeout: int = Field(default=120, ge=1, le=3600)
+    system_prompt: str = "You are a helpful assistant."
+    max_history_messages: int = Field(default=200, ge=1, le=100_000)
+    max_context_tokens: int = Field(default=4096, ge=128, le=1_000_000)
+
+    @field_validator("host", "model", mode="before")
+    @classmethod
+    def _validate_required_string(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Expected a string value.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("String value must not be empty.")
+        return normalized
+
+    @field_validator("system_prompt", mode="before")
+    @classmethod
+    def _normalize_prompt(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Expected a string value.")
+        return value.strip()
+
+
+class UIConfig(BaseModel):
+    """Visual settings for Textual rendering."""
+
+    font_size: int = Field(default=14, ge=8, le=72)
+    background_color: str = "#1a1b26"
+    user_message_color: str = "#7aa2f7"
+    assistant_message_color: str = "#9ece6a"
+    border_color: str = "#565f89"
+    show_timestamps: bool = True
+    stream_chunk_size: int = Field(default=8, ge=1, le=1024)
+
+    @field_validator(
+        "background_color",
+        "user_message_color",
+        "assistant_message_color",
+        "border_color",
+        mode="before",
+    )
+    @classmethod
+    def _validate_hex_color(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Expected a string value.")
+        normalized = value.strip()
+        if not HEX_COLOR_PATTERN.match(normalized):
+            raise ValueError("Color must use #RGB or #RRGGBB format.")
+        return normalized
+
+
+class KeybindsConfig(BaseModel):
+    """Keyboard action mapping."""
+
+    send_message: str = "ctrl+enter"
+    new_conversation: str = "ctrl+n"
+    quit: str = "ctrl+q"
+    scroll_up: str = "ctrl+k"
+    scroll_down: str = "ctrl+j"
+    toggle_model_picker: str = "ctrl+m"
+    save_conversation: str = "ctrl+s"
+    load_conversation: str = "ctrl+l"
+    export_conversation: str = "ctrl+e"
+    search_messages: str = "ctrl+f"
+    copy_last_message: str = "ctrl+y"
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _validate_keybind(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Keybind must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Keybind must not be empty.")
+        return normalized
+
+
+class SecurityConfig(BaseModel):
+    """Security policy for remote host access."""
+
+    allow_remote_hosts: bool = False
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1", "::1"]
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _validate_allowed_hosts(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("allowed_hosts must be a list.")
+        normalized_hosts = [item.strip().lower() for item in value if isinstance(item, str) and item.strip()]
+        if not normalized_hosts:
+            raise ValueError("allowed_hosts must contain at least one host.")
+        return normalized_hosts
+
+
+class LoggingConfig(BaseModel):
+    """Logging behavior and output destinations."""
+
+    level: str = "INFO"
+    structured: bool = True
+    log_to_file: bool = False
+    log_file_path: str = "~/.local/state/ollama-chat/app.log"
+
+    @field_validator("level", mode="before")
+    @classmethod
+    def _validate_level(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Logging level must be a string.")
+        normalized = value.strip().upper()
+        if normalized not in VALID_LOG_LEVELS:
+            raise ValueError(f"Unsupported log level {normalized!r}.")
+        return normalized
+
+    @field_validator("log_file_path", mode="before")
+    @classmethod
+    def _validate_log_file_path(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("log_file_path must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("log_file_path must not be empty.")
+        return normalized
+
+
+class PersistenceConfig(BaseModel):
+    """Conversation persistence settings (Tier 2 feature flags included)."""
+
+    enabled: bool = False
+    directory: str = "~/.local/state/ollama-chat/conversations"
+    metadata_path: str = "~/.local/state/ollama-chat/conversations/index.json"
+
+    @field_validator("directory", "metadata_path", mode="before")
+    @classmethod
+    def _validate_path_string(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Path value must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Path value must not be empty.")
+        return normalized
+
+
+class Config(BaseModel):
+    """Root configuration model for all sections."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    app: AppConfig = AppConfig()
+    ollama: OllamaConfig = OllamaConfig()
+    ui: UIConfig = UIConfig()
+    keybinds: KeybindsConfig = KeybindsConfig()
+    security: SecurityConfig = SecurityConfig()
+    logging: LoggingConfig = LoggingConfig()
+    persistence: PersistenceConfig = PersistenceConfig()
+
+    @model_validator(mode="after")
+    def _validate_security_policy(self) -> Config:
+        parsed = urlparse(self.ollama.host)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").strip().lower()
+
+        if scheme not in {"http", "https"}:
+            raise ValueError("ollama.host must use http or https scheme.")
+        if not hostname:
+            raise ValueError("ollama.host must include a hostname.")
+        if not self.security.allow_remote_hosts and hostname not in set(self.security.allowed_hosts):
+            raise ValueError(
+                "ollama.host is not in security.allowed_hosts while allow_remote_hosts is false."
+            )
+        return self
+
+
+DEFAULT_CONFIG: dict[str, dict[str, Any]] = Config().model_dump(by_alias=True)
+
+
+def ensure_config_dir(config_dir: Path | None = None) -> Path:
+    """Ensure that the config directory exists and return its path."""
+    directory = config_dir or CONFIG_DIR
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        LOGGER.warning("Unable to create config directory %s: %s", directory, exc)
+    return directory
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge override values onto base values."""
+    merged: dict[str, Any] = deepcopy(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _enforce_private_permissions(path: Path) -> None:
+    """Best-effort enforcement of private file permissions on POSIX systems."""
+    if os.name != "posix" or not path.exists():
+        return
+    try:
+        path.chmod(0o600)
+    except OSError as exc:
+        LOGGER.warning("Unable to enforce 0600 permissions for %s: %s", path, exc)
+
+
+def _safe_default_config() -> dict[str, dict[str, Any]]:
+    """Return a deep copy of validated default config data."""
+    return deepcopy(DEFAULT_CONFIG)
+
+
+def _validate_config(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Validate merged config and fallback to safe defaults when possible."""
+    try:
+        config = Config.model_validate(raw)
+        return config.model_dump(by_alias=True)
+    except ValidationError as exc:
+        LOGGER.warning("Configuration validation failed, using safe defaults: %s", exc)
+        return _safe_default_config()
+    except Exception as exc:  # noqa: BLE001 - unexpected model construction failure.
+        raise ConfigValidationError(f"Unable to validate configuration: {exc}") from exc
+
+
+def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """
+    Load configuration from TOML, merge with defaults, and validate.
+
+    The optional ``config_path`` argument is intended for tests and tooling.
+    """
+    target_path = config_path or CONFIG_PATH
+    ensure_config_dir(target_path.parent)
+    _enforce_private_permissions(target_path)
+
+    raw_data: dict[str, Any] = {}
+    if target_path.exists():
+        try:
+            raw_data = tomllib.loads(target_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - we must not crash on invalid user config.
+            LOGGER.warning("Failed to parse config at %s: %s", target_path, exc)
+            raw_data = {}
+
+    merged = _deep_merge(DEFAULT_CONFIG, raw_data) if isinstance(raw_data, dict) else _safe_default_config()
+    validated = _validate_config(merged)
+    _enforce_private_permissions(target_path)
+    return validated

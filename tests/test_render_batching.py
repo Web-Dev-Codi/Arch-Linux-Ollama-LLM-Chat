@@ -1,0 +1,87 @@
+"""Tests for batched streaming rendering behavior."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator
+import unittest
+
+try:
+    from ollama_chat.app import OllamaChatApp
+except ModuleNotFoundError:
+    OllamaChatApp = None  # type: ignore[assignment]
+
+
+class _FakeConversation:
+    def __init__(self) -> None:
+        self.scroll_calls = 0
+
+    def scroll_end(self, animate: bool = False) -> None:
+        self.scroll_calls += 1
+
+
+class _FakeBubble:
+    def __init__(self) -> None:
+        self.content = ""
+        self.append_calls = 0
+        self.set_calls = 0
+
+    def append_content(self, content_chunk: str) -> None:
+        self.content += content_chunk
+        self.append_calls += 1
+
+    def set_content(self, content: str) -> None:
+        self.content = content
+        self.set_calls += 1
+
+
+class _FakeChat:
+    def __init__(self, chunks: list[str]) -> None:
+        self._chunks = chunks
+
+    async def send_message(self, user_message: str) -> AsyncGenerator[str, None]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeApp:
+    def __init__(self, chunks: list[str], stream_chunk_size: int) -> None:
+        self.config = {"ui": {"stream_chunk_size": stream_chunk_size}}
+        self.chat = _FakeChat(chunks)
+        self._conversation = _FakeConversation()
+        self.sub_title = ""
+
+    def query_one(self, *_args, **_kwargs) -> _FakeConversation:
+        return self._conversation
+
+    def _update_status_bar(self) -> None:
+        return
+
+
+@unittest.skipIf(OllamaChatApp is None, "textual is not installed")
+class RenderBatchingTests(unittest.IsolatedAsyncioTestCase):
+    """Validate that stream updates are batched and flushed."""
+
+    async def test_chunk_updates_are_batched(self) -> None:
+        fake_app = _FakeApp(chunks=["a", "b", "c", "d", "e", "f", "g"], stream_chunk_size=3)
+        bubble = _FakeBubble()
+
+        await OllamaChatApp._stream_assistant_response(fake_app, "hello", bubble)  # type: ignore[arg-type]
+
+        self.assertEqual(bubble.content, "abcdefg")
+        self.assertEqual(bubble.append_calls, 3)
+        self.assertEqual(bubble.set_calls, 0)
+        self.assertEqual(fake_app._conversation.scroll_calls, 3)
+
+    async def test_empty_stream_sets_placeholder(self) -> None:
+        fake_app = _FakeApp(chunks=[], stream_chunk_size=4)
+        bubble = _FakeBubble()
+
+        await OllamaChatApp._stream_assistant_response(fake_app, "hello", bubble)  # type: ignore[arg-type]
+
+        self.assertEqual(bubble.content, "(No response from model.)")
+        self.assertEqual(bubble.append_calls, 0)
+        self.assertEqual(bubble.set_calls, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
