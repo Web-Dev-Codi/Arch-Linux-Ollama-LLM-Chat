@@ -357,14 +357,21 @@ class OllamaChatApp(App[None]):
         except Exception:
             return
 
+    def _build_header(self) -> Header:
+        """Return header with visual hamburger icon when supported."""
+        try:
+            return Header(name=self.window_title, icon="☰")
+        except TypeError:
+            return Header(name=self.window_title)
+
     def compose(self) -> ComposeResult:
         """Compose app widgets."""
+        yield self._build_header()
         with Container(id="app-root"):
-            yield Header(name=self.window_title)
             yield ConversationView(id="conversation")
             yield InputBox()
             yield StatusBar(id="status_bar")
-            yield Footer()
+        yield Footer()
 
     async def on_mount(self) -> None:
         """Apply theme and register runtime keybindings."""
