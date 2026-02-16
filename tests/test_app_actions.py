@@ -70,8 +70,21 @@ class _FakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
+    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
+        return True
+
     async def check_connection(self) -> bool:
         return True
+
+    @staticmethod
+    def _model_name_matches(requested_model: str, available_model: str) -> bool:
+        requested = requested_model.strip().lower()
+        available = available_model.strip().lower()
+        if requested == available:
+            return True
+        if ":" not in requested and available.startswith(f"{requested}:"):
+            return True
+        return False
 
     def set_model(self, model_name: str) -> None:
         self.model = model_name

@@ -82,19 +82,81 @@ class OllamaChat:
         if normalized:
             self.model = normalized
 
+    @staticmethod
+    def _model_name_matches(requested_model: str, available_model: str) -> bool:
+        requested = requested_model.strip().lower()
+        available = available_model.strip().lower()
+        if requested == available:
+            return True
+        if ":" not in requested and available.startswith(f"{requested}:"):
+            return True
+        return False
+
     async def list_models(self) -> list[str]:
         """Return available model names from Ollama."""
         response = await self._client.list()
         names: list[str] = []
-        if isinstance(response, dict):
+        models: Any = None
+        if hasattr(response, "models"):
+            models = getattr(response, "models")
+        elif isinstance(response, dict):
             models = response.get("models")
-            if isinstance(models, list):
-                for model in models:
-                    if isinstance(model, dict):
-                        name = model.get("name")
-                        if isinstance(name, str) and name.strip():
-                            names.append(name.strip())
+        elif hasattr(response, "model_dump"):
+            try:
+                models = response.model_dump().get("models")
+            except Exception:
+                models = None
+
+        if isinstance(models, list):
+            for model in models:
+                candidate_name: str | None = None
+                if isinstance(model, dict):
+                    for key in ("name", "model"):
+                        value = model.get(key)
+                        if isinstance(value, str) and value.strip():
+                            candidate_name = value.strip()
+                            break
+                else:
+                    for attr in ("name", "model"):
+                        value = getattr(model, attr, None)
+                        if isinstance(value, str) and value.strip():
+                            candidate_name = value.strip()
+                            break
+                if candidate_name:
+                    names.append(candidate_name)
         return names
+
+    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:
+        """Ensure configured model is available; optionally pull it when missing."""
+        try:
+            available_models = await self.list_models()
+        except Exception as exc:
+            raise self._map_exception(exc) from exc
+
+        if any(self._model_name_matches(self.model, available) for available in available_models):
+            LOGGER.info(
+                "chat.model.ready",
+                extra={"event": "chat.model.ready", "model": self.model},
+            )
+            return True
+
+        if not pull_if_missing:
+            raise OllamaModelNotFoundError(f"Configured model {self.model!r} is not available.")
+
+        LOGGER.info(
+            "chat.model.pull.start",
+            extra={"event": "chat.model.pull.start", "model": self.model},
+        )
+        try:
+            await self._client.pull(model=self.model, stream=False)
+        except Exception as exc:
+            raise self._map_exception(exc) from exc
+
+        LOGGER.info(
+            "chat.model.pull.complete",
+            extra={"event": "chat.model.pull.complete", "model": self.model},
+        )
+        return True
 
     async def check_connection(self) -> bool:
         """Return whether the Ollama host is reachable."""
@@ -112,12 +174,32 @@ class OllamaChat:
     @staticmethod
     def _extract_chunk_text(chunk: Any) -> str:
         """Extract streamed token text from an Ollama chunk payload."""
+        message_obj = getattr(chunk, "message", None)
+        if message_obj is not None:
+            message_content = getattr(message_obj, "content", None)
+            if isinstance(message_content, str):
+                return message_content
+
+        if hasattr(chunk, "model_dump"):
+            try:
+                chunk = chunk.model_dump()
+            except Exception:
+                pass
+        elif hasattr(chunk, "dict"):
+            try:
+                chunk = chunk.dict()
+            except Exception:
+                pass
+
         if isinstance(chunk, dict):
             message = chunk.get("message")
             if isinstance(message, dict):
                 content = message.get("content")
                 if isinstance(content, str):
                     return content
+            content = chunk.get("content")
+            if isinstance(content, str):
+                return content
         return ""
 
     def _map_exception(self, exc: Exception) -> OllamaChatError:

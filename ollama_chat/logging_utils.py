@@ -81,9 +81,19 @@ def configure_logging(logging_config: dict[str, Any]) -> None:
     else:
         formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 
+    for logger_name in ("httpx", "httpcore", "ollama"):
+        library_logger = logging.getLogger(logger_name)
+        library_logger.setLevel(logging.WARNING)
+        library_logger.propagate = True
+
+    def app_only_filter(record: logging.LogRecord) -> bool:
+        return record.name.startswith("ollama_chat")
+
+    console_level = max(level, logging.WARNING)
     stderr_handler = logging.StreamHandler()
     stderr_handler.setFormatter(formatter)
-    stderr_handler.setLevel(level)
+    stderr_handler.setLevel(console_level)
+    stderr_handler.addFilter(app_only_filter)
     root.addHandler(stderr_handler)
 
     if log_to_file:

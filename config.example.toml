@@ -10,6 +10,7 @@ timeout = 120
 system_prompt = "You are a helpful assistant."
 max_history_messages = 200
 max_context_tokens = 4096
+pull_model_on_start = true
 
 [ui]
 font_size = 14

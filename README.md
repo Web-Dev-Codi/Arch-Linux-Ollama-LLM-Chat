@@ -99,6 +99,7 @@ timeout = 120
 system_prompt = "You are a helpful assistant."
 max_history_messages = 200
 max_context_tokens = 4096
+pull_model_on_start = true
 
 [ui]
 font_size = 14
@@ -206,6 +207,7 @@ pytest -q
 ## Troubleshooting
 
 - `Connection error`: Ensure `ollama serve` is running and `ollama.host` points to the correct endpoint.
+- Startup says model is missing: keep `ollama.pull_model_on_start = true` or run `ollama pull <model>` manually.
 - Empty assistant response: verify the model name exists (`ollama list`) and check Ollama logs.
 - Keybind not working: confirm syntax in `[keybinds]` and restart the app.
 - UI colors not applied as expected: validate hex color format (`#RRGGBB` or `#RGB`).

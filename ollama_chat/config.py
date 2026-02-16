@@ -56,6 +56,7 @@ class OllamaConfig(BaseModel):
     system_prompt: str = "You are a helpful assistant."
     max_history_messages: int = Field(default=200, ge=1, le=100_000)
     max_context_tokens: int = Field(default=4096, ge=128, le=1_000_000)
+    pull_model_on_start: bool = True
 
     @field_validator("host", "model", mode="before")
     @classmethod

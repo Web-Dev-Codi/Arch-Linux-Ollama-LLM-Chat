@@ -174,7 +174,7 @@ class OllamaChatApp(App[None]):
             yield StatusBar(id="status_bar")
             yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Apply theme and register runtime keybindings."""
         self.title = self.window_title
         self.sub_title = f"Model: {self.chat.model}"
@@ -188,9 +188,42 @@ class OllamaChatApp(App[None]):
                 show=binding.show,
                 key_display=binding.key_display,
             )
+
+        input_widget = self.query_one("#message_input", Input)
+        send_button = self.query_one("#send_button", Button)
+        input_widget.disabled = True
+        send_button.disabled = True
+        await self._ensure_startup_model_ready()
+        input_widget.disabled = False
+        send_button.disabled = False
+        input_widget.focus()
+
         self._update_status_bar()
         self._connection_monitor_task = asyncio.create_task(self._connection_monitor_loop())
         self._background_tasks.add(self._connection_monitor_task)
+
+    async def _ensure_startup_model_ready(self) -> None:
+        """Ensure configured model is available before interactive usage."""
+        pull_on_start = bool(self.config["ollama"].get("pull_model_on_start", True))
+        self.sub_title = f"Preparing model: {self.chat.model}"
+        try:
+            await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
+            self._connection_state = "online"
+            self.sub_title = f"Model ready: {self.chat.model}"
+        except OllamaConnectionError:
+            self._connection_state = "offline"
+            self.sub_title = "Cannot reach Ollama. Start ollama serve."
+        except OllamaModelNotFoundError:
+            self._connection_state = "online"
+            self.sub_title = (
+                f"Model not available: {self.chat.model}. "
+                "Enable pull_model_on_start or run ollama pull manually."
+            )
+        except OllamaStreamingError:
+            self._connection_state = "offline"
+            self.sub_title = "Failed while preparing model."
+        except OllamaChatError:
+            self.sub_title = "Model preparation failed."
 
     def _apply_theme(self) -> None:
         ui_cfg = self.config["ui"]
@@ -486,11 +519,12 @@ class OllamaChatApp(App[None]):
             self.sub_title = "No models reported by Ollama."
             return
 
-        if self.chat.model in models:
-            current_index = models.index(self.chat.model)
-            next_model = models[(current_index + 1) % len(models)]
-        else:
-            next_model = models[0]
+        current_index = -1
+        for index, model_name in enumerate(models):
+            if self.chat._model_name_matches(self.chat.model, model_name):
+                current_index = index
+                break
+        next_model = models[(current_index + 1) % len(models)]
         self.chat.set_model(next_model)
         self.sub_title = f"Active model: {next_model}"
         self._update_status_bar()
