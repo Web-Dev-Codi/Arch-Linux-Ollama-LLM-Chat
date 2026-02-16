@@ -136,6 +136,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
                 "_render_messages_from_history": OllamaChatApp._render_messages_from_history,
                 "_jump_to_search_result": OllamaChatApp._jump_to_search_result,
                 "_transition_state": OllamaChatApp._transition_state,
+                "_activate_selected_model": OllamaChatApp._activate_selected_model,
                 "action_toggle_model_picker": OllamaChatApp.action_toggle_model_picker,
                 "action_save_conversation": OllamaChatApp.action_save_conversation,
                 "action_load_conversation": OllamaChatApp.action_load_conversation,
@@ -155,11 +156,13 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         self.app._search_query = ""
         self.app._search_results = []
         self.app._search_position = -1
+        self.app._configured_models = ["llama3.2", "qwen2.5"]
         self.app.sub_title = ""
         self.app._conversation = _FakeConversation()
         self.app._input = _FakeInput()
         self.app._status = _FakeStatusBar()
         self.app.clipboard = ""
+        self.app._set_idle_sub_title = lambda text: setattr(self.app, "sub_title", text)
 
         def query_one(selector, _widget_type=None):
             if selector == "#message_input":
@@ -182,7 +185,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         self.app._timestamp = lambda: ""
 
     async def test_model_switch_save_load_export(self) -> None:
-        await self.app.action_toggle_model_picker()
+        await self.app._activate_selected_model("qwen2.5")
         self.assertEqual(self.app.chat.model, "qwen2.5")
 
         await self.app.action_save_conversation()
@@ -194,6 +197,11 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
 
         await self.app.action_export_conversation()
         self.assertTrue(self.app.persistence.exported)
+
+    async def test_model_switch_rejects_unconfigured_model(self) -> None:
+        await self.app._activate_selected_model("mistral")
+        self.assertEqual(self.app.chat.model, "llama3.2")
+        self.assertIn("not configured", self.app.sub_title)
 
     async def test_search_and_copy_last_message(self) -> None:
         self.app._input.value = "answer"

@@ -72,6 +72,7 @@ python -m ollama_chat
 
 - Type your prompt in the input field.
 - Press `ctrl+enter` to send.
+- Click `Model` in the status bar to pick a configured model.
 - Use `ctrl+n` to start a new conversation.
 - Use `ctrl+q` to quit.
 
@@ -95,6 +96,7 @@ connection_check_interval_seconds = 15
 [ollama]
 host = "http://localhost:11434"
 model = "llama3.2"
+models = ["llama3.2", "qwen2.5", "mistral"]
 timeout = 120
 system_prompt = "You are a helpful assistant."
 max_history_messages = 200
@@ -116,6 +118,7 @@ new_conversation = "ctrl+n"
 quit = "ctrl+q"
 scroll_up = "ctrl+k"
 scroll_down = "ctrl+j"
+command_palette = "ctrl+p"
 toggle_model_picker = "ctrl+m"
 save_conversation = "ctrl+s"
 load_conversation = "ctrl+l"
@@ -148,7 +151,8 @@ Default keybinds:
 - `ctrl+q`: Quit
 - `ctrl+k`: Scroll up
 - `ctrl+j`: Scroll down
-- `ctrl+m`: Cycle available models
+- `ctrl+p`: Open command palette
+- `ctrl+m`: Open configured model picker
 - `ctrl+s`: Save conversation (requires `[persistence].enabled = true`)
 - `ctrl+l`: Load latest saved conversation (requires persistence enabled)
 - `ctrl+e`: Export markdown transcript (requires persistence enabled)

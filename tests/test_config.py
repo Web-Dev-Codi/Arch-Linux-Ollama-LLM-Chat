@@ -18,7 +18,9 @@ class ConfigTests(unittest.TestCase):
             config = load_config(config_path=config_path)
             self.assertEqual(config["app"]["title"], DEFAULT_CONFIG["app"]["title"])
             self.assertEqual(config["ollama"]["model"], DEFAULT_CONFIG["ollama"]["model"])
+            self.assertEqual(config["ollama"]["models"], DEFAULT_CONFIG["ollama"]["models"])
             self.assertEqual(config["keybinds"]["send_message"], DEFAULT_CONFIG["keybinds"]["send_message"])
+            self.assertEqual(config["keybinds"]["command_palette"], DEFAULT_CONFIG["keybinds"]["command_palette"])
             self.assertEqual(config["security"]["allow_remote_hosts"], DEFAULT_CONFIG["security"]["allow_remote_hosts"])
             self.assertEqual(config["logging"]["level"], DEFAULT_CONFIG["logging"]["level"])
 
@@ -29,6 +31,7 @@ class ConfigTests(unittest.TestCase):
                 """
 [ollama]
 model = "qwen2.5"
+models = ["qwen2.5", "llama3.2", "qwen2.5"]
 
 [ui]
 show_timestamps = false
@@ -37,9 +40,24 @@ show_timestamps = false
             )
             config = load_config(config_path=config_path)
             self.assertEqual(config["ollama"]["model"], "qwen2.5")
+            self.assertEqual(config["ollama"]["models"], ["qwen2.5", "llama3.2"])
             self.assertFalse(config["ui"]["show_timestamps"])
             self.assertEqual(config["app"]["title"], DEFAULT_CONFIG["app"]["title"])
             self.assertEqual(config["security"]["allow_remote_hosts"], DEFAULT_CONFIG["security"]["allow_remote_hosts"])
+
+    def test_models_fallback_to_single_model_when_models_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                """
+[ollama]
+model = "mistral"
+                """.strip(),
+                encoding="utf-8",
+            )
+            config = load_config(config_path=config_path)
+            self.assertEqual(config["ollama"]["model"], "mistral")
+            self.assertEqual(config["ollama"]["models"], ["mistral"])
 
     def test_invalid_values_fallback_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

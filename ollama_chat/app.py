@@ -11,7 +11,8 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
-from textual.widgets import Button, Footer, Header, Input
+from textual.screen import ModalScreen
+from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .chat import OllamaChat
 from .config import load_config
@@ -32,18 +33,97 @@ from .widgets.status_bar import StatusBar
 LOGGER = logging.getLogger(__name__)
 
 
+class ModelPickerScreen(ModalScreen[str | None]):
+    """Modal picker for selecting a configured Ollama model."""
+
+    CSS = """
+    ModelPickerScreen {
+        align: center middle;
+    }
+
+    #model-picker-dialog {
+        width: 50;
+        max-height: 22;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+
+    #model-picker-title {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    #model-picker-help {
+        padding-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Close", show=False)]
+
+    def __init__(self, models: list[str], active_model: str) -> None:
+        super().__init__()
+        self.models = models
+        self.active_model = active_model
+
+    @staticmethod
+    def _name_matches(requested_model: str, candidate_model: str) -> bool:
+        requested = requested_model.strip().lower()
+        candidate = candidate_model.strip().lower()
+        if requested == candidate:
+            return True
+        if ":" not in requested and candidate.startswith(f"{requested}:"):
+            return True
+        return False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="model-picker-dialog"):
+            yield Static("Select model from config", id="model-picker-title")
+            yield OptionList(*self.models, id="model-picker-options")
+            yield Static("Enter/click to select  |  Esc to cancel", id="model-picker-help")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#model-picker-options", OptionList)
+        selected_index = 0
+        for index, model_name in enumerate(self.models):
+            if self._name_matches(self.active_model, model_name):
+                selected_index = index
+                break
+        options.highlighted = selected_index
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        option_index = int(event.option_index)
+        if 0 <= option_index < len(self.models):
+            self.dismiss(self.models[option_index])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class OllamaChatApp(App[None]):
     """ChatGPT-style TUI app powered by local Ollama models."""
 
     CSS = """
     Screen {
         layout: vertical;
+        background: $background;
     }
 
     #app-root {
         layout: vertical;
         width: 100%;
         height: 1fr;
+        background: $background;
+    }
+
+    Header {
+        border-bottom: solid $panel;
+        background: $surface;
+    }
+
+    Footer {
+        border-top: solid $panel;
+        background: $surface;
     }
 
     #conversation {
@@ -55,6 +135,7 @@ class OllamaChatApp(App[None]):
         height: auto;
         padding: 0 1 1 1;
         border-top: solid $panel;
+        background: $surface;
     }
 
     #message_input {
@@ -68,8 +149,25 @@ class OllamaChatApp(App[None]):
 
     #status_bar {
         height: auto;
-        padding: 0 1;
+        padding: 0 0;
         border-top: solid $panel;
+        background: $surface;
+    }
+
+    #status_bar .status-segment {
+        padding: 0 1;
+    }
+
+    #status_bar .status-separator {
+        padding: 0 0;
+    }
+
+    #status_model {
+        text-style: bold;
+    }
+
+    #status_model:hover {
+        text-style: bold underline;
     }
 
     MessageBubble {
@@ -81,10 +179,12 @@ class OllamaChatApp(App[None]):
 
     .message-user {
         align-horizontal: right;
+        background: $primary;
     }
 
     .message-assistant {
         align-horizontal: left;
+        background: $surface;
     }
     """
 
@@ -94,6 +194,7 @@ class OllamaChatApp(App[None]):
         "quit": "Quit",
         "scroll_up": "Scroll Up",
         "scroll_down": "Scroll Down",
+        "command_palette": "🧭 Palette",
         "toggle_model_picker": "Model",
         "save_conversation": "Save",
         "load_conversation": "Load",
@@ -108,6 +209,7 @@ class OllamaChatApp(App[None]):
         "quit": "quit",
         "scroll_up": "scroll_up",
         "scroll_down": "scroll_down",
+        "command_palette": "command_palette",
         "toggle_model_picker": "toggle_model_picker",
         "save_conversation": "save_conversation",
         "load_conversation": "load_conversation",
@@ -116,15 +218,28 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "copy_last_message",
     }
 
+    RESPONSE_PLACEHOLDER_FRAMES: tuple[str, ...] = (
+        "🤖 Warming up the tiny token factory...",
+        "🧠 Reassembling thoughts into words...",
+        "🛰️ Polling satellites for better adjectives...",
+        "🪄 Convincing electrons to be helpful...",
+        "🐢 Racing your prompt at light-ish speed...",
+    )
+
     def __init__(self) -> None:
         self.config = load_config()
         self.window_title = str(self.config["app"]["title"])
         configure_logging(self.config["logging"])
 
         ollama_cfg = self.config["ollama"]
+        configured_default_model = str(ollama_cfg["model"])
+        self._configured_models = self._normalize_configured_models(
+            raw_models=ollama_cfg.get("models"),
+            default_model=configured_default_model,
+        )
         self.chat = OllamaChat(
             host=str(ollama_cfg["host"]),
-            model=str(ollama_cfg["model"]),
+            model=configured_default_model,
             system_prompt=str(ollama_cfg["system_prompt"]),
             timeout=int(ollama_cfg["timeout"]),
             max_history_messages=int(ollama_cfg["max_history_messages"]),
@@ -138,6 +253,7 @@ class OllamaChatApp(App[None]):
         self._search_query = ""
         self._search_results: list[int] = []
         self._search_position = -1
+        self._response_indicator_task: asyncio.Task[None] | None = None
         persistence_cfg = self.config["persistence"]
         self.persistence = ConversationPersistence(
             enabled=bool(persistence_cfg["enabled"]),
@@ -165,6 +281,34 @@ class OllamaChatApp(App[None]):
                 )
         return bindings
 
+    @staticmethod
+    def _normalize_configured_models(raw_models: Any, default_model: str) -> list[str]:
+        configured: list[str] = []
+        if isinstance(raw_models, list):
+            for item in raw_models:
+                if not isinstance(item, str):
+                    continue
+                candidate = item.strip()
+                if candidate and candidate not in configured:
+                    configured.append(candidate)
+
+        normalized_default = default_model.strip()
+        if not configured:
+            configured = [normalized_default]
+        if normalized_default and normalized_default not in configured:
+            configured.insert(0, normalized_default)
+        return configured
+
+    def _command_palette_key_display(self) -> str:
+        for binding in self._binding_specs:
+            if binding.action == "command_palette":
+                return binding.key.upper()
+        return "CTRL+P"
+
+    def _set_idle_sub_title(self, prefix: str) -> None:
+        palette_hint = f"🧭 Palette: {self._command_palette_key_display()}"
+        self.sub_title = f"{prefix}  |  {palette_hint}"
+
     def compose(self) -> ComposeResult:
         """Compose app widgets."""
         with Container(id="app-root"):
@@ -177,7 +321,7 @@ class OllamaChatApp(App[None]):
     async def on_mount(self) -> None:
         """Apply theme and register runtime keybindings."""
         self.title = self.window_title
-        self.sub_title = f"Model: {self.chat.model}"
+        self._set_idle_sub_title(f"Model: {self.chat.model}")
         LOGGER.info("app.state.transition", extra={"event": "app.state.transition", "to_state": "IDLE"})
         self._apply_theme()
         for binding in self._binding_specs:
@@ -209,7 +353,7 @@ class OllamaChatApp(App[None]):
         try:
             await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
             self._connection_state = "online"
-            self.sub_title = f"Model ready: {self.chat.model}"
+            self._set_idle_sub_title(f"Model ready: {self.chat.model}")
         except OllamaConnectionError:
             self._connection_state = "offline"
             self.sub_title = "Cannot reach Ollama. Start ollama serve."
@@ -226,19 +370,31 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Model preparation failed."
 
     def _apply_theme(self) -> None:
+        """Apply fallback theme settings and restyle mounted widgets."""
         ui_cfg = self.config["ui"]
-        variables = {
-            "background": str(ui_cfg["background_color"]),
-            "panel": str(ui_cfg["border_color"]),
-        }
+        use_theme_palette = self._using_theme_palette()
         if hasattr(self, "theme_variables") and isinstance(self.theme_variables, dict):
-            self.theme_variables.update(variables)
+            fallback_variables = {
+                "fallback_background": str(ui_cfg["background_color"]),
+                "fallback_panel": str(ui_cfg["border_color"]),
+                "fallback_user_message": str(ui_cfg["user_message_color"]),
+                "fallback_assistant_message": str(ui_cfg["assistant_message_color"]),
+            }
+            for key, value in fallback_variables.items():
+                self.theme_variables.setdefault(key, value)
 
         try:
             root = self.query_one("#app-root", Container)
-            root.styles.background = str(ui_cfg["background_color"])
+            if not use_theme_palette:
+                root.styles.background = str(ui_cfg["background_color"])
         except Exception:
             pass
+
+        self._restyle_rendered_bubbles()
+
+    def watch_theme(self, *_args: str) -> None:
+        """Ensure all widgets react when a Textual theme changes."""
+        self._apply_theme()
 
     @property
     def show_timestamps(self) -> bool:
@@ -250,14 +406,30 @@ class OllamaChatApp(App[None]):
         return datetime.now().strftime("%H:%M:%S")
 
     def _style_bubble(self, bubble: MessageBubble, role: str) -> None:
+        use_theme_palette = self._using_theme_palette()
         ui_cfg = self.config["ui"]
-        bubble.styles.border = ("round", str(ui_cfg["border_color"]))
         if role == "user":
-            bubble.styles.background = str(ui_cfg["user_message_color"])
             bubble.styles.align_horizontal = "right"
+            if not use_theme_palette:
+                bubble.styles.background = str(ui_cfg["user_message_color"])
         else:
-            bubble.styles.background = str(ui_cfg["assistant_message_color"])
             bubble.styles.align_horizontal = "left"
+            if not use_theme_palette:
+                bubble.styles.background = str(ui_cfg["assistant_message_color"])
+        if not use_theme_palette:
+            bubble.styles.border = ("round", str(ui_cfg["border_color"]))
+
+    def _restyle_rendered_bubbles(self) -> None:
+        try:
+            conversation = self.query_one(ConversationView)
+        except Exception:
+            return
+        for bubble in conversation.children:
+            if isinstance(bubble, MessageBubble):
+                self._style_bubble(bubble, bubble.role)
+
+    def _using_theme_palette(self) -> bool:
+        return bool(getattr(self, "theme", ""))
 
     def _update_status_bar(self) -> None:
         message_count = sum(1 for message in self.chat.messages if message.get("role") != "system")
@@ -268,6 +440,59 @@ class OllamaChatApp(App[None]):
             message_count=message_count,
             estimated_tokens=self.chat.estimated_context_tokens,
         )
+
+    async def _open_configured_model_picker(self) -> None:
+        if await self.state.get_state() != ConversationState.IDLE:
+            self.sub_title = "Model switch is available only when idle."
+            return
+        configured_models = list(self._configured_models)
+        if not configured_models:
+            self.sub_title = "No configured models found in config."
+            return
+        self.push_screen(
+            ModelPickerScreen(configured_models, self.chat.model),
+            callback=self._on_model_picker_dismissed,
+        )
+
+    def _on_model_picker_dismissed(self, selected_model: str | None) -> None:
+        if selected_model is None:
+            return
+        task = asyncio.create_task(self._activate_selected_model(selected_model))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _activate_selected_model(self, model_name: str) -> None:
+        if await self.state.get_state() != ConversationState.IDLE:
+            self.sub_title = "Model switch is available only when idle."
+            return
+        if model_name not in self._configured_models:
+            self.sub_title = f"Model is not configured: {model_name}"
+            return
+
+        previous_model = self.chat.model
+        self.chat.set_model(model_name)
+        self.sub_title = f"Switching model: {model_name}"
+        try:
+            await self.chat.ensure_model_ready(pull_if_missing=False)
+            self._connection_state = "online"
+            self._set_idle_sub_title(f"Active model: {model_name}")
+        except OllamaConnectionError:
+            self.chat.set_model(previous_model)
+            self._connection_state = "offline"
+            self.sub_title = "Unable to switch model while offline."
+        except OllamaModelNotFoundError:
+            self.chat.set_model(previous_model)
+            self._set_idle_sub_title(
+                f"Configured model unavailable in Ollama: {model_name}"
+            )
+        except OllamaStreamingError:
+            self.chat.set_model(previous_model)
+            self.sub_title = "Failed while validating selected model."
+        except OllamaChatError:
+            self.chat.set_model(previous_model)
+            self.sub_title = "Model switch failed."
+        finally:
+            self._update_status_bar()
 
     async def _connection_monitor_loop(self) -> None:
         interval = int(self.config["app"]["connection_check_interval_seconds"])
@@ -282,7 +507,7 @@ class OllamaChatApp(App[None]):
                         extra={"event": "app.connection.state", "connection_state": new_state},
                     )
                     if await self.state.get_state() == ConversationState.IDLE:
-                        self.sub_title = f"Connection: {new_state}"
+                        self._set_idle_sub_title(f"Connection: {new_state}")
                 self._update_status_bar()
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
@@ -294,6 +519,10 @@ class OllamaChatApp(App[None]):
         bubble = await conversation.add_message(content=content, role=role, timestamp=timestamp)
         self._style_bubble(bubble, role)
         return bubble
+
+    async def on_status_bar_model_picker_requested(self, _message: StatusBar.ModelPickerRequested) -> None:
+        """Open configured model picker from StatusBar model segment click."""
+        await self._open_configured_model_picker()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle send button clicks."""
@@ -321,29 +550,56 @@ class OllamaChatApp(App[None]):
             },
         )
 
+    async def _animate_response_placeholder(self, assistant_bubble: MessageBubble) -> None:
+        frame_index = 0
+        while True:
+            assistant_bubble.set_content(
+                self.RESPONSE_PLACEHOLDER_FRAMES[frame_index % len(self.RESPONSE_PLACEHOLDER_FRAMES)]
+            )
+            frame_index += 1
+            await asyncio.sleep(0.35)
+
+    async def _stop_response_indicator_task(self) -> None:
+        task = self._response_indicator_task
+        self._response_indicator_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def _stream_assistant_response(self, user_text: str, assistant_bubble: MessageBubble) -> None:
         chunk_size = max(1, int(self.config["ui"]["stream_chunk_size"]))
         display_buffer: list[str] = []
         response_chunks: list[str] = []
         self.sub_title = "Waiting for response..."
+        self._response_indicator_task = asyncio.create_task(self._animate_response_placeholder(assistant_bubble))
 
-        async for chunk in self.chat.send_message(user_text):
-            if not response_chunks:
-                self.sub_title = "Streaming response..."
-            response_chunks.append(chunk)
-            display_buffer.append(chunk)
-            if len(display_buffer) >= chunk_size:
+        try:
+            async for chunk in self.chat.send_message(user_text):
+                if not response_chunks:
+                    self.sub_title = "Streaming response..."
+                    await self._stop_response_indicator_task()
+                    assistant_bubble.set_content("")
+                response_chunks.append(chunk)
+                display_buffer.append(chunk)
+                if len(display_buffer) >= chunk_size:
+                    assistant_bubble.append_content("".join(display_buffer))
+                    display_buffer.clear()
+                    self.query_one(ConversationView).scroll_end(animate=False)
+
+            if display_buffer:
                 assistant_bubble.append_content("".join(display_buffer))
-                display_buffer.clear()
                 self.query_one(ConversationView).scroll_end(animate=False)
 
-        if display_buffer:
-            assistant_bubble.append_content("".join(display_buffer))
-            self.query_one(ConversationView).scroll_end(animate=False)
-
-        if not response_chunks:
-            assistant_bubble.set_content("(No response from model.)")
-        self._update_status_bar()
+            if not response_chunks:
+                assistant_bubble.set_content("(No response from model.)")
+            self._update_status_bar()
+        finally:
+            await self._stop_response_indicator_task()
 
     async def send_user_message(self) -> None:
         """Collect input text and stream the assistant response into the UI."""
@@ -382,7 +638,7 @@ class OllamaChatApp(App[None]):
             finally:
                 self._background_tasks.discard(self._active_stream_task)
                 self._active_stream_task = None
-            self.sub_title = "Ready"
+            self._set_idle_sub_title("Ready")
         except asyncio.CancelledError:
             self.sub_title = "Request cancelled."
             LOGGER.info("chat.request.cancelled", extra={"event": "chat.request.cancelled"})
@@ -448,7 +704,7 @@ class OllamaChatApp(App[None]):
         self._search_results = []
         self._search_position = -1
         await self._transition_state(ConversationState.IDLE)
-        self.sub_title = f"Model: {self.chat.model}"
+        self._set_idle_sub_title(f"Model: {self.chat.model}")
         self._update_status_bar()
 
     async def _clear_conversation_view(self) -> None:
@@ -476,6 +732,7 @@ class OllamaChatApp(App[None]):
     async def on_unmount(self) -> None:
         """Cancel and await all background tasks during shutdown."""
         await self._transition_state(ConversationState.CANCELLING)
+        await self._stop_response_indicator_task()
         tasks: set[asyncio.Task[Any]] = {task for task in self._background_tasks if not task.done()}
         if self._active_stream_task is not None and not self._active_stream_task.done():
             tasks.add(self._active_stream_task)
@@ -506,28 +763,8 @@ class OllamaChatApp(App[None]):
         conversation.scroll_relative(y=10, animate=False)
 
     async def action_toggle_model_picker(self) -> None:
-        """Cycle through available models while in IDLE state."""
-        if await self.state.get_state() != ConversationState.IDLE:
-            self.sub_title = "Model switch is available only when idle."
-            return
-        try:
-            models = await self.chat.list_models()
-        except Exception:
-            self.sub_title = "Unable to fetch model list from Ollama."
-            return
-        if not models:
-            self.sub_title = "No models reported by Ollama."
-            return
-
-        current_index = -1
-        for index, model_name in enumerate(models):
-            if self.chat._model_name_matches(self.chat.model, model_name):
-                current_index = index
-                break
-        next_model = models[(current_index + 1) % len(models)]
-        self.chat.set_model(next_model)
-        self.sub_title = f"Active model: {next_model}"
-        self._update_status_bar()
+        """Open configured model picker while in IDLE state."""
+        await self._open_configured_model_picker()
 
     async def action_save_conversation(self) -> None:
         """Persist the current conversation to disk."""
@@ -571,7 +808,7 @@ class OllamaChatApp(App[None]):
             self.chat.set_model(model.strip())
         await self._clear_conversation_view()
         await self._render_messages_from_history(self.chat.messages)
-        self.sub_title = f"Loaded conversation for model: {self.chat.model}"
+        self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
         self._update_status_bar()
 
     async def action_export_conversation(self) -> None:

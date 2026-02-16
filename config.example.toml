@@ -6,6 +6,7 @@ connection_check_interval_seconds = 15
 [ollama]
 host = "http://localhost:11434"
 model = "llama3.2"
+models = ["llama3.2", "qwen2.5", "mistral"]
 timeout = 120
 system_prompt = "You are a helpful assistant."
 max_history_messages = 200
@@ -27,6 +28,7 @@ new_conversation = "ctrl+n"
 quit = "ctrl+q"
 scroll_up = "ctrl+k"
 scroll_down = "ctrl+j"
+command_palette = "ctrl+p"
 toggle_model_picker = "ctrl+m"
 save_conversation = "ctrl+s"
 load_conversation = "ctrl+l"

@@ -52,6 +52,7 @@ class OllamaConfig(BaseModel):
 
     host: str = "http://localhost:11434"
     model: str = "llama3.2"
+    models: list[str] = Field(default_factory=list)
     timeout: int = Field(default=120, ge=1, le=3600)
     system_prompt: str = "You are a helpful assistant."
     max_history_messages: int = Field(default=200, ge=1, le=100_000)
@@ -74,6 +75,39 @@ class OllamaConfig(BaseModel):
         if not isinstance(value, str):
             raise ValueError("Expected a string value.")
         return value.strip()
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def _validate_models(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("models must be a list of model names.")
+
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("Each model name in models must be a string.")
+            candidate = item.strip()
+            if not candidate:
+                raise ValueError("Model names in models must not be empty.")
+            if candidate not in normalized:
+                normalized.append(candidate)
+        return normalized
+
+    @model_validator(mode="after")
+    def _normalize_model_list(self) -> OllamaConfig:
+        ordered_models = list(self.models)
+        if not ordered_models:
+            ordered_models = [self.model]
+        if self.model not in ordered_models:
+            ordered_models.insert(0, self.model)
+        deduped: list[str] = []
+        for model_name in ordered_models:
+            if model_name not in deduped:
+                deduped.append(model_name)
+        self.models = deduped
+        return self
 
 
 class UIConfig(BaseModel):
@@ -112,6 +146,7 @@ class KeybindsConfig(BaseModel):
     quit: str = "ctrl+q"
     scroll_up: str = "ctrl+k"
     scroll_down: str = "ctrl+j"
+    command_palette: str = "ctrl+p"
     toggle_model_picker: str = "ctrl+m"
     save_conversation: str = "ctrl+s"
     load_conversation: str = "ctrl+l"

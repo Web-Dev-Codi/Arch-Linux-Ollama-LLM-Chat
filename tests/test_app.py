@@ -27,6 +27,9 @@ class AppBindingTests(unittest.TestCase):
         self.assertEqual(len(bindings), len(OllamaChatApp.KEY_TO_ACTION))  # type: ignore[union-attr]
         self.assertEqual(bindings[0].action, "send_message")
         self.assertEqual(bindings[0].key, "ctrl+enter")
+        action_map = {binding.action: binding for binding in bindings}
+        self.assertIn("command_palette", action_map)
+        self.assertEqual(action_map["command_palette"].description, "🧭 Palette")
 
     def test_blank_keybind_is_not_registered(self) -> None:
         config = {

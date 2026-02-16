@@ -11,6 +11,7 @@ from ollama_chat.exceptions import (
     OllamaModelNotFoundError,
     OllamaStreamingError,
 )
+from ollama_chat.state import ConversationState
 
 try:
     from textual.widgets import Input
@@ -108,6 +109,7 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
         app = OllamaChatApp()
         app.chat = _RuntimeFakeChat(failure=failure)  # type: ignore[assignment]
         app.persistence = _RuntimeFakePersistence()  # type: ignore[assignment]
+        app._configured_models = ["llama3.2", "qwen2.5"]
         app._connection_state = "online"
         app.config["app"]["connection_check_interval_seconds"] = 999
         app._copied_text = ""
@@ -135,7 +137,7 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await app.action_copy_last_message()
             self.assertEqual(app._copied_text, "answer")
 
-            await app.action_toggle_model_picker()
+            await app._activate_selected_model("llama3.2")
             self.assertEqual(app.chat.model, "llama3.2")
 
             await app.action_export_conversation()
@@ -143,6 +145,9 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             await app.action_new_conversation()
             self.assertEqual(len(app.chat.messages), 1)
+
+            status_connection = app.query_one("#status_connection")
+            self.assertIn("🟢", str(status_connection.renderable))
 
     async def test_send_message_connection_error_path(self) -> None:
         app = self._build_app(failure="connection")
@@ -175,6 +180,15 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             input_widget.value = "hello"
             await app.action_send_message()
             self.assertEqual(app.sub_title, "Chat error")
+
+    async def test_model_switch_rejected_when_not_idle(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            await app.state.transition_to(ConversationState.STREAMING)
+            current_model = app.chat.model
+            await app._activate_selected_model("qwen2.5")
+            self.assertEqual(app.chat.model, current_model)
+            self.assertEqual(app.sub_title, "Model switch is available only when idle.")
 
 
 if __name__ == "__main__":
