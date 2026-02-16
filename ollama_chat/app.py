@@ -126,13 +126,11 @@ class OllamaChatApp(App[None]):
     }
 
     Header {
-        dock: top;
         border-bottom: solid $panel;
         background: $surface;
     }
 
     Footer {
-        dock: bottom;
         border-top: solid $panel;
         background: $surface;
     }
@@ -143,7 +141,6 @@ class OllamaChatApp(App[None]):
     }
 
     InputBox {
-        dock: bottom;
         height: auto;
         padding: 0 1 1 1;
         border-top: solid $panel;
@@ -160,7 +157,6 @@ class OllamaChatApp(App[None]):
     }
 
     #status_bar {
-        dock: bottom;
         height: auto;
         padding: 0 1;
         border-top: solid $panel;
