@@ -6,33 +6,33 @@ build-backend = "setuptools.build_meta"
 name = "ollama-chat-tui"
 version = "0.1.0"
 description = "ChatGPT-style TUI for Ollama local LLMs"
-authors = [{ name = "Brian", email = "brian@example.com" }]
+authors = [{ name = "Web-Dev-Codi", email = "webdevcodi@gmail.com" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "textual>=0.50.0",
+    "textual>=7.5.0",
     "ollama>=0.1.0",
     "pydantic>=2.0.0",
-    "rich>=13.0.0",
+    "rich>=14.3.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.2.0",
     "pytest-mock>=3.10.0",
-    "pytest-cov>=4.0.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    "black>=23.0.0",
+    "black>=26.1.0",
 ]
 
 [project.scripts]
 ollama-chat = "ollama_chat.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/brian/Arch-Linux-Ollama-LLM-Chat"
+Homepage = "https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat"
 
 [tool.setuptools.packages.find]
 include = ["ollama_chat*"]
@@ -42,7 +42,7 @@ python_files = ["test_*.py"]
 addopts = "-q"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_configs = true
