@@ -26,7 +26,7 @@ It supports streaming responses, configurable keybinds, and Hyprland/Ghostty-fri
 ### Quick start (recommended)
 
 ```bash
-git clone https://github.com/brian/Arch-Linux-Ollama-LLM-Chat.git
+git clone https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat.git
 cd Arch-Linux-Ollama-LLM-Chat
 python -m venv .venv
 source .venv/bin/activate
