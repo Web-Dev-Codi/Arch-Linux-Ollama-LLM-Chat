@@ -95,9 +95,15 @@ class ModelPickerScreen(ModalScreen[str | None]):
         options.highlighted = selected_index
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        option_index = int(event.option_index)
-        if 0 <= option_index < len(self.models):
-            self.dismiss(self.models[option_index])
+        option_index = getattr(event, "option_index", None)
+        if option_index is None:
+            option_index = getattr(event, "index", -1)
+        try:
+            selected_index = int(option_index)
+        except (TypeError, ValueError):
+            selected_index = -1
+        if 0 <= selected_index < len(self.models):
+            self.dismiss(self.models[selected_index])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -120,11 +126,13 @@ class OllamaChatApp(App[None]):
     }
 
     Header {
+        dock: top;
         border-bottom: solid $panel;
         background: $surface;
     }
 
     Footer {
+        dock: bottom;
         border-top: solid $panel;
         background: $surface;
     }
@@ -135,6 +143,7 @@ class OllamaChatApp(App[None]):
     }
 
     InputBox {
+        dock: bottom;
         height: auto;
         padding: 0 1 1 1;
         border-top: solid $panel;
@@ -151,26 +160,11 @@ class OllamaChatApp(App[None]):
     }
 
     #status_bar {
+        dock: bottom;
         height: auto;
-        padding: 0 0;
+        padding: 0 1;
         border-top: solid $panel;
         background: $surface;
-    }
-
-    #status_bar .status-segment {
-        padding: 0 1;
-    }
-
-    #status_bar .status-separator {
-        padding: 0 0;
-    }
-
-    #status_model {
-        text-style: bold;
-    }
-
-    #status_model:hover {
-        text-style: bold underline;
     }
 
     MessageBubble {
@@ -257,6 +251,7 @@ class OllamaChatApp(App[None]):
         self._search_query = ""
         self._search_results: list[int] = []
         self._search_position = -1
+        self._startup_model_task: asyncio.Task[None] | None = None
         self._response_indicator_task: asyncio.Task[None] | None = None
         persistence_cfg = self.config["persistence"]
         self.persistence = ConversationPersistence(
@@ -331,26 +326,6 @@ class OllamaChatApp(App[None]):
         window_id = os.environ.get("WINDOWID", "").strip()
         if window_id:
             return window_id
-
-        xdotool_bin = shutil.which("xdotool")
-        if xdotool_bin is None:
-            return None
-
-        try:
-            result = subprocess.run(
-                [xdotool_bin, "search", "--onlyvisible", "--pid", str(os.getppid())],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=0.75,
-            )
-        except Exception:
-            return None
-
-        for line in result.stdout.splitlines():
-            candidate = line.strip()
-            if candidate.isdigit():
-                return candidate
         return None
 
     def _set_window_class_best_effort(self) -> None:
@@ -381,7 +356,7 @@ class OllamaChatApp(App[None]):
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=0.75,
+                timeout=0.2,
             )
         except Exception:
             return
@@ -414,14 +389,26 @@ class OllamaChatApp(App[None]):
         send_button = self.query_one("#send_button", Button)
         input_widget.disabled = True
         send_button.disabled = True
-        await self._ensure_startup_model_ready()
-        input_widget.disabled = False
-        send_button.disabled = False
-        input_widget.focus()
-
         self._update_status_bar()
+
+        self._startup_model_task = asyncio.create_task(self._prepare_startup_model())
+        self._background_tasks.add(self._startup_model_task)
+        self._startup_model_task.add_done_callback(self._background_tasks.discard)
+
         self._connection_monitor_task = asyncio.create_task(self._connection_monitor_loop())
         self._background_tasks.add(self._connection_monitor_task)
+
+    async def _prepare_startup_model(self) -> None:
+        """Warm up model in background so UI stays responsive on launch."""
+        input_widget = self.query_one("#message_input", Input)
+        send_button = self.query_one("#send_button", Button)
+        try:
+            await self._ensure_startup_model_ready()
+        finally:
+            input_widget.disabled = False
+            send_button.disabled = False
+            input_widget.focus()
+            self._update_status_bar()
 
     async def _ensure_startup_model_ready(self) -> None:
         """Ensure configured model is available before interactive usage."""
