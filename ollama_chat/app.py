@@ -6,6 +6,9 @@ import asyncio
 from datetime import datetime
 import inspect
 import logging
+import os
+import shutil
+import subprocess
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -229,6 +232,7 @@ class OllamaChatApp(App[None]):
     def __init__(self) -> None:
         self.config = load_config()
         self.window_title = str(self.config["app"]["title"])
+        self.window_class = str(self.config["app"]["class"])
         configure_logging(self.config["logging"])
 
         ollama_cfg = self.config["ollama"]
@@ -261,7 +265,7 @@ class OllamaChatApp(App[None]):
             metadata_path=str(persistence_cfg["metadata_path"]),
         )
         self._binding_specs = self._binding_specs_from_config(self.config)
-        print(f"\033]0;{self.window_title}\007", end="", flush=True)
+        self._apply_terminal_window_identity()
         super().__init__()
 
     @classmethod
@@ -308,6 +312,79 @@ class OllamaChatApp(App[None]):
     def _set_idle_sub_title(self, prefix: str) -> None:
         palette_hint = f"🧭 Palette: {self._command_palette_key_display()}"
         self.sub_title = f"{prefix}  |  {palette_hint}"
+
+    def _apply_terminal_window_identity(self) -> None:
+        """Best-effort terminal identity setup for title and class."""
+        self._emit_osc("0", self.window_title)
+        self._emit_osc("2", self.window_title)
+        if self.window_class.strip():
+            self._emit_osc("1", self.window_class.strip())
+        self._set_window_class_best_effort()
+
+    @staticmethod
+    def _emit_osc(code: str, value: str) -> None:
+        if not value.strip():
+            return
+        print(f"\033]{code};{value}\007", end="", flush=True)
+
+    def _discover_window_id(self) -> str | None:
+        window_id = os.environ.get("WINDOWID", "").strip()
+        if window_id:
+            return window_id
+
+        xdotool_bin = shutil.which("xdotool")
+        if xdotool_bin is None:
+            return None
+
+        try:
+            result = subprocess.run(
+                [xdotool_bin, "search", "--onlyvisible", "--pid", str(os.getppid())],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=0.75,
+            )
+        except Exception:
+            return None
+
+        for line in result.stdout.splitlines():
+            candidate = line.strip()
+            if candidate.isdigit():
+                return candidate
+        return None
+
+    def _set_window_class_best_effort(self) -> None:
+        class_name = self.window_class.strip()
+        if not class_name:
+            return
+        xprop_bin = shutil.which("xprop")
+        if xprop_bin is None:
+            return
+
+        window_id = self._discover_window_id()
+        if window_id is None:
+            return
+
+        try:
+            subprocess.run(
+                [
+                    xprop_bin,
+                    "-id",
+                    window_id,
+                    "-f",
+                    "WM_CLASS",
+                    "8s",
+                    "-set",
+                    "WM_CLASS",
+                    f"{class_name},{class_name}",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=0.75,
+            )
+        except Exception:
+            return
 
     def compose(self) -> ComposeResult:
         """Compose app widgets."""

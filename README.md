@@ -1,18 +1,31 @@
 # Ollama Chat TUI
 
-`ollama-chat-tui` is a ChatGPT-style terminal UI built with Textual for local Ollama models.  
-It supports streaming responses, configurable keybinds, and Hyprland/Ghostty-friendly launch behavior.
+`ollama-chat-tui` is your local AI cockpit in the terminal: fast, private, and gloriously cloud-free.
+Talk to Ollama models with a slick ChatGPT-style TUI, live streaming replies, clickable model switching, and keyboard-first controls.
+Best part: once your models are pulled, you can keep chatting even when your internet is having a meltdown.
+
+No API keys. No surprise bills. No sending your conversations to someone else's server. Just you, your machine, and your LLMs.
 
 ## Features
 
-- Streaming responses from Ollama with batched UI rendering.
+- Fully local LLM chat via Ollama with no cloud dependency.
+- Works offline after models are pulled.
+- Streaming responses with batched rendering for smooth output.
+- Animated in-bubble "thinking" placeholders while responses start.
+- Interactive status bar with traffic-light connection indicators.
+- Clickable model picker in the status bar, plus `ctrl+m` shortcut.
+- Built-in command palette shortcut (`ctrl+p`) with UI hints in header/footer.
+- Multi-model config support with quick runtime model switching.
+- Save/load/export conversation history (JSON and Markdown).
+- Search messages and cycle results from the input box.
+- Copy the latest assistant reply to clipboard in one shortcut.
 - Lock-protected app state machine with cancellation-safe reset/shutdown.
 - Bounded message history with deterministic context token trimming.
-- Domain exception mapping with user-safe error notifications.
-- Configurable app, model, UI colors, security policy, logging, and keybinds via TOML.
-- Clear user/assistant message bubbles with optional timestamps.
-- Keyboard-first workflow for sending, scrolling, new chat, and quit.
-- Terminal title is set by the app; terminal class is set by your launcher.
+- Retry and backoff for resilient streaming on transient failures.
+- Secure-by-default host allowlist for Ollama endpoint safety.
+- Structured logging with optional file logging for debugging/ops.
+- Configurable app settings, keybinds, UI, security, and logging via TOML.
+- Terminal title and a best-effort window class are set by the app on startup.
 - Python package with console entrypoint: `ollama-chat`.
 
 ## Requirements
@@ -20,6 +33,7 @@ It supports streaming responses, configurable keybinds, and Hyprland/Ghostty-fri
 - Python 3.11+
 - Ollama installed and available in `PATH`
 - Ollama daemon available locally (`ollama serve`)
+- Internet is only needed to pull models initially; chat usage can be offline afterward
 
 ## Installation
 
@@ -161,8 +175,8 @@ Default keybinds:
 
 ## Hyprland + Ghostty integration
 
-The app sets terminal title using ANSI escape codes at startup and does not set terminal window class directly.
-Set your terminal class in the launcher command (for example Ghostty `--class`).
+The app now attempts to set terminal window class on startup using `app.class` from config.
+For the most reliable behavior (especially on Wayland-native terminals), still pass class in the launcher command (for example Ghostty `--class`).
 
 Launch directly with a class:
 
@@ -215,6 +229,7 @@ pytest -q
 - Empty assistant response: verify the model name exists (`ollama list`) and check Ollama logs.
 - Keybind not working: confirm syntax in `[keybinds]` and restart the app.
 - UI colors not applied as expected: validate hex color format (`#RRGGBB` or `#RGB`).
+- Window class rule not matching: keep `app.class` set, and prefer launching terminal with explicit class flag (for example `ghostty --class=ollama-chat-tui -e ollama-chat`).
 
 ## Screenshot / Demo
 
