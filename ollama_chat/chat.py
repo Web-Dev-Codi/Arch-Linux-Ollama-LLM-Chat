@@ -191,94 +191,61 @@ class OllamaChat:
     @property
     def estimated_context_tokens(self) -> int:
         """Return deterministic token estimate for current context."""
-        return self.message_store.estimated_tokens(self.messages)
+        # Pass None so MessageStore reads _messages directly (no copy).
+        return self.message_store.estimated_tokens()
 
     @staticmethod
-    def _extract_chunk_text(chunk: Any) -> str:
+    def _extract_from_chunk(chunk: Any, field: str) -> Any:
+        """Extract a named field from message.field in an Ollama chunk payload.
+
+        Tries SDK object attribute access first, then falls back to dict paths
+        produced by model_dump() / dict().  Returns None when the field is absent.
+        """
+        message_obj = getattr(chunk, "message", None)
+        if message_obj is not None:
+            value = getattr(message_obj, field, None)
+            if value is not None:
+                return value
+
+        # Normalise Pydantic-model chunks to plain dicts once.
+        if hasattr(chunk, "model_dump"):
+            try:
+                chunk = chunk.model_dump()
+            except Exception:
+                pass
+        elif hasattr(chunk, "dict"):
+            try:
+                chunk = chunk.dict()
+            except Exception:
+                pass
+
+        if isinstance(chunk, dict):
+            message = chunk.get("message")
+            if isinstance(message, dict):
+                value = message.get(field)
+                if value is not None:
+                    return value
+            # Top-level fallback (e.g. generate endpoint).
+            return chunk.get(field)
+        return None
+
+    @classmethod
+    def _extract_chunk_text(cls, chunk: Any) -> str:
         """Extract streamed token text from an Ollama chunk payload."""
-        message_obj = getattr(chunk, "message", None)
-        if message_obj is not None:
-            message_content = getattr(message_obj, "content", None)
-            if isinstance(message_content, str):
-                return message_content
+        value = cls._extract_from_chunk(chunk, "content")
+        return value if isinstance(value, str) else ""
 
-        if hasattr(chunk, "model_dump"):
-            try:
-                chunk = chunk.model_dump()
-            except Exception:
-                pass
-        elif hasattr(chunk, "dict"):
-            try:
-                chunk = chunk.dict()
-            except Exception:
-                pass
-
-        if isinstance(chunk, dict):
-            message = chunk.get("message")
-            if isinstance(message, dict):
-                content = message.get("content")
-                if isinstance(content, str):
-                    return content
-            content = chunk.get("content")
-            if isinstance(content, str):
-                return content
-        return ""
-
-    @staticmethod
-    def _extract_chunk_thinking(chunk: Any) -> str:
+    @classmethod
+    def _extract_chunk_thinking(cls, chunk: Any) -> str:
         """Extract streamed thinking text from an Ollama chunk payload."""
-        message_obj = getattr(chunk, "message", None)
-        if message_obj is not None:
-            thinking = getattr(message_obj, "thinking", None)
-            if isinstance(thinking, str):
-                return thinking
+        value = cls._extract_from_chunk(chunk, "thinking")
+        return value if isinstance(value, str) else ""
 
-        if hasattr(chunk, "model_dump"):
-            try:
-                chunk = chunk.model_dump()
-            except Exception:
-                pass
-        elif hasattr(chunk, "dict"):
-            try:
-                chunk = chunk.dict()
-            except Exception:
-                pass
-
-        if isinstance(chunk, dict):
-            message = chunk.get("message")
-            if isinstance(message, dict):
-                thinking = message.get("thinking")
-                if isinstance(thinking, str):
-                    return thinking
-        return ""
-
-    @staticmethod
-    def _extract_chunk_tool_calls(chunk: Any) -> list[Any]:
+    @classmethod
+    def _extract_chunk_tool_calls(cls, chunk: Any) -> list[Any]:
         """Extract tool_calls from an Ollama chunk payload."""
-        message_obj = getattr(chunk, "message", None)
-        if message_obj is not None:
-            tool_calls = getattr(message_obj, "tool_calls", None)
-            if isinstance(tool_calls, list):
-                return tool_calls
-
-        if hasattr(chunk, "model_dump"):
-            try:
-                chunk = chunk.model_dump()
-            except Exception:
-                pass
-        elif hasattr(chunk, "dict"):
-            try:
-                chunk = chunk.dict()
-            except Exception:
-                pass
-
-        if isinstance(chunk, dict):
-            message = chunk.get("message")
-            if isinstance(message, dict):
-                tool_calls = message.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    return tool_calls
-        return []
+        value = cls._extract_from_chunk(chunk, "tool_calls")
+        return value if isinstance(value, list) else []
 
     def _map_exception(self, exc: Exception) -> OllamaChatError:
         if isinstance(exc, OllamaChatError):
@@ -311,17 +278,6 @@ class OllamaChat:
         return OllamaStreamingError(
             f"Failed to stream response from Ollama at {self.host}: {exc}"
         )
-
-    async def _stream_once(
-        self, request_messages: list[dict[str, Any]]
-    ) -> AsyncGenerator[str, None]:
-        stream = await self._client.chat(
-            model=self.model, messages=request_messages, stream=True
-        )
-        async for chunk in stream:
-            text = self._extract_chunk_text(chunk)
-            if text:
-                yield text
 
     async def _stream_once_with_capabilities(
         self,
@@ -473,20 +429,20 @@ class OllamaChat:
                 break
 
             # Append the assistant turn (with tool calls) to the request context.
+            # accumulated_tool_calls is non-empty here (checked above).
             assistant_turn: dict[str, Any] = {
                 "role": "assistant",
                 "content": accumulated_content,
-            }
-            if accumulated_thinking:
-                assistant_turn["thinking"] = accumulated_thinking
-            if accumulated_tool_calls:
-                assistant_turn["tool_calls"] = [
+                "tool_calls": [
                     {
                         "type": "function",
                         "function": {"name": tc["name"], "arguments": tc["args"]},
                     }
                     for tc in accumulated_tool_calls
-                ]
+                ],
+            }
+            if accumulated_thinking:
+                assistant_turn["thinking"] = accumulated_thinking
             request_messages.append(assistant_turn)
 
             # Execute each tool call and append results.

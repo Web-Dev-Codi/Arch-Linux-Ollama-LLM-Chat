@@ -34,6 +34,13 @@ class StatusBar(Static):
         yield Label("|", id="status_sep3")
         yield Label("Est. tokens: 0", id="status_tokens")
 
+    def on_mount(self) -> None:
+        """Cache label references once after the DOM is ready."""
+        self._lbl_connection = self.query_one("#status_connection", Label)
+        self._lbl_model = self.query_one("#status_model", Label)
+        self._lbl_messages = self.query_one("#status_messages", Label)
+        self._lbl_tokens = self.query_one("#status_tokens", Label)
+
     def set_status(
         self,
         *,
@@ -44,12 +51,10 @@ class StatusBar(Static):
     ) -> None:
         """Update all status segment labels."""
         icon = "🟢" if connection_state == "online" else "🔴"
-        self.query_one("#status_connection", Label).update(f"{icon} {connection_state}")
-        self.query_one("#status_model", Label).update(f"Model: {model}")
-        self.query_one("#status_messages", Label).update(f"Messages: {message_count}")
-        self.query_one("#status_tokens", Label).update(
-            f"Est. tokens: {estimated_tokens}"
-        )
+        self._lbl_connection.update(f"{icon} {connection_state}")
+        self._lbl_model.update(f"Model: {model}")
+        self._lbl_messages.update(f"Messages: {message_count}")
+        self._lbl_tokens.update(f"Est. tokens: {estimated_tokens}")
 
     def on_click(self, event: events.Click) -> None:
         """Open model picker from status bar click."""

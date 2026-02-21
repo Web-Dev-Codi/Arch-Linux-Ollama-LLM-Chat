@@ -62,55 +62,57 @@ class ToolRegistry:
         return not bool(self._tools)
 
 
-def _web_search_tool(query: str, max_results: int = 5) -> str:
-    """Search the web for a query and return relevant results.
+def _make_web_search_tool(api_key: str) -> Callable[..., str]:
+    """Return a web_search callable with the API key bound at creation time."""
 
-    Args:
-        query: The search query string.
-        max_results: Maximum number of results to return (1-10).
-
-    Returns:
-        Formatted search results as a string.
-    """
     if _ollama_web_search is None:
         raise OllamaToolError(
             "web_search is unavailable: the ollama package is not installed."
         )
-    api_key = os.environ.get("OLLAMA_API_KEY", "").strip()
-    if not api_key:
-        raise OllamaToolError(
-            "web_search requires OLLAMA_API_KEY to be set in the environment."
-        )
-    try:
-        response = _ollama_web_search(query, max_results=max_results)
-        return str(response)
-    except Exception as exc:  # noqa: BLE001
-        raise OllamaToolError(f"web_search failed: {exc}") from exc
+
+    def _web_search_tool(query: str, max_results: int = 5) -> str:
+        """Search the web for a query and return relevant results.
+
+        Args:
+            query: The search query string.
+            max_results: Maximum number of results to return (1-10).
+
+        Returns:
+            Formatted search results as a string.
+        """
+        os.environ["OLLAMA_API_KEY"] = api_key
+        try:
+            return str(_ollama_web_search(query, max_results=max_results))
+        except Exception as exc:  # noqa: BLE001
+            raise OllamaToolError(f"web_search failed: {exc}") from exc
+
+    return _web_search_tool
 
 
-def _web_fetch_tool(url: str) -> str:
-    """Fetch the content of a web page by URL.
+def _make_web_fetch_tool(api_key: str) -> Callable[..., str]:
+    """Return a web_fetch callable with the API key bound at creation time."""
 
-    Args:
-        url: The URL to fetch.
-
-    Returns:
-        The page title and content as a string.
-    """
     if _ollama_web_fetch is None:
         raise OllamaToolError(
             "web_fetch is unavailable: the ollama package is not installed."
         )
-    api_key = os.environ.get("OLLAMA_API_KEY", "").strip()
-    if not api_key:
-        raise OllamaToolError(
-            "web_fetch requires OLLAMA_API_KEY to be set in the environment."
-        )
-    try:
-        response = _ollama_web_fetch(url)
-        return str(response)
-    except Exception as exc:  # noqa: BLE001
-        raise OllamaToolError(f"web_fetch failed: {exc}") from exc
+
+    def _web_fetch_tool(url: str) -> str:
+        """Fetch the content of a web page by URL.
+
+        Args:
+            url: The URL to fetch.
+
+        Returns:
+            The page title and content as a string.
+        """
+        os.environ["OLLAMA_API_KEY"] = api_key
+        try:
+            return str(_ollama_web_fetch(url))
+        except Exception as exc:  # noqa: BLE001
+            raise OllamaToolError(f"web_fetch failed: {exc}") from exc
+
+    return _web_fetch_tool
 
 
 def build_default_registry(
@@ -119,18 +121,25 @@ def build_default_registry(
 ) -> ToolRegistry:
     """Build and return a ToolRegistry with built-in tools based on config.
 
-    When web_search_enabled is True, registers web_search and web_fetch.
-    If web_search_api_key is provided it is injected into the environment
-    before tool execution.
+    When web_search_enabled is True, validates the API key once and registers
+    web_search and web_fetch with the key bound at construction time.
     """
     registry = ToolRegistry()
-    if web_search_enabled:
-        if web_search_api_key:
-            os.environ.setdefault("OLLAMA_API_KEY", web_search_api_key)
-        registry.register(_web_search_tool)
-        registry.register(_web_fetch_tool)
-        LOGGER.info(
-            "tools.web_search.enabled",
-            extra={"event": "tools.web_search.enabled"},
+    if not web_search_enabled:
+        return registry
+
+    # Resolve API key: explicit config value takes precedence over env var.
+    api_key = web_search_api_key or os.environ.get("OLLAMA_API_KEY", "").strip()
+    if not api_key:
+        raise OllamaToolError(
+            "web_search_enabled is True but no OLLAMA_API_KEY was found. "
+            "Set web_search_api_key in [capabilities] or export OLLAMA_API_KEY."
         )
+
+    registry.register(_make_web_search_tool(api_key))
+    registry.register(_make_web_fetch_tool(api_key))
+    LOGGER.info(
+        "tools.web_search.enabled",
+        extra={"event": "tools.web_search.enabled"},
+    )
     return registry

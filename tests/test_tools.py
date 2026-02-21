@@ -76,11 +76,28 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertTrue(registry.is_empty)
 
     def test_build_default_registry_registers_web_tools_when_enabled(self) -> None:
-        registry = build_default_registry(web_search_enabled=True)
+        registry = build_default_registry(
+            web_search_enabled=True, web_search_api_key="test-key"
+        )
         tools = registry.build_tools_list()
         tool_names = [fn.__name__ for fn in tools]
-        self.assertIn("_web_search_tool", tool_names)
-        self.assertIn("_web_fetch_tool", tool_names)
+        # Inner factory functions are named _web_search_tool / _web_fetch_tool.
+        self.assertTrue(any("web_search" in n for n in tool_names))
+        self.assertTrue(any("web_fetch" in n for n in tool_names))
+
+    def test_build_default_registry_raises_without_api_key(self) -> None:
+        from ollama_chat.exceptions import OllamaToolError
+
+        # Ensure OLLAMA_API_KEY is not set for this test.
+        import os
+
+        old = os.environ.pop("OLLAMA_API_KEY", None)
+        try:
+            with self.assertRaises(OllamaToolError):
+                build_default_registry(web_search_enabled=True, web_search_api_key="")
+        finally:
+            if old is not None:
+                os.environ["OLLAMA_API_KEY"] = old
 
     def test_multiple_registrations_do_not_duplicate(self) -> None:
         registry = ToolRegistry()

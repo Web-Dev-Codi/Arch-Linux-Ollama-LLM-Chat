@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
+
+# Epoch used to convert LogRecord.created (POSIX float) to UTC datetime.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 _STANDARD_LOG_ATTRS = {
     "args",
@@ -39,8 +42,10 @@ class JsonFormatter(logging.Formatter):
     """Emit JSON lines for structured logging."""
 
     def format(self, record: logging.LogRecord) -> str:
+        # Use the actual event time from the LogRecord, not the formatting time.
+        ts = (_EPOCH + timedelta(seconds=record.created)).isoformat()
         data: dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": ts,
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

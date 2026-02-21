@@ -75,16 +75,6 @@ class ModelPickerScreen(ModalScreen[str | None]):
         self.models = models
         self.active_model = active_model
 
-    @staticmethod
-    def _name_matches(requested_model: str, candidate_model: str) -> bool:
-        requested = requested_model.strip().lower()
-        candidate = candidate_model.strip().lower()
-        if requested == candidate:
-            return True
-        if ":" not in requested and candidate.startswith(f"{requested}:"):
-            return True
-        return False
-
     def compose(self) -> ComposeResult:
         with Container(id="model-picker-dialog"):
             yield Static("Select model from config", id="model-picker-title")
@@ -97,7 +87,7 @@ class ModelPickerScreen(ModalScreen[str | None]):
         options = self.query_one("#model-picker-options", OptionList)
         selected_index = 0
         for index, model_name in enumerate(self.models):
-            if self._name_matches(self.active_model, model_name):
+            if OllamaChat._model_name_matches(self.active_model, model_name):
                 selected_index = index
                 break
         options.highlighted = selected_index
@@ -875,12 +865,24 @@ class OllamaChatApp(App[None]):
         cleaned = _IMAGE_PREFIX_RE.sub("", text).strip()
         return cleaned, paths
 
+    async def _handle_stream_error(
+        self,
+        bubble: MessageBubble | None,
+        message: str,
+        subtitle: str,
+    ) -> None:
+        """Transition to ERROR state and display the error in the assistant bubble."""
+        await self._transition_state(ConversationState.ERROR)
+        if bubble is None:
+            await self._add_message(
+                content=message, role="assistant", timestamp=self._timestamp()
+            )
+        else:
+            bubble.set_content(message)
+        self.sub_title = subtitle
+
     async def send_user_message(self) -> None:
         """Collect input text and stream the assistant response into the UI."""
-        if not await self.state.can_send_message():
-            self.sub_title = "Busy. Wait for current request to finish."
-            return
-
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
         raw_text = input_widget.value.strip()
@@ -910,6 +912,9 @@ class OllamaChatApp(App[None]):
                 )
                 self.sub_title = f"Image not found, skipping: {img_path}"
 
+        # Atomic CAS: only proceed when IDLE → STREAMING succeeds.
+        # This replaces a separate can_send_message() check, eliminating
+        # the TOCTOU gap between the two lock acquisitions.
         assistant_bubble: MessageBubble | None = None
         transitioned = await self.state.transition_if(
             ConversationState.IDLE, ConversationState.STREAMING
@@ -961,57 +966,33 @@ class OllamaChatApp(App[None]):
             )
             return
         except OllamaToolError as exc:
-            await self._transition_state(ConversationState.ERROR)
-            error_message = f"Tool error: {exc}"
-            if assistant_bubble is None:
-                assistant_bubble = await self._add_message(
-                    content=error_message, role="assistant", timestamp=self._timestamp()
-                )
-            else:
-                assistant_bubble.set_content(error_message)
-            self.sub_title = "Tool execution error"
-        except OllamaConnectionError:
-            await self._transition_state(ConversationState.ERROR)
-            error_message = (
-                "Connection error. Verify Ollama service and host configuration."
+            await self._handle_stream_error(
+                assistant_bubble, f"Tool error: {exc}", "Tool execution error"
             )
-            if assistant_bubble is None:
-                assistant_bubble = await self._add_message(
-                    content=error_message, role="assistant", timestamp=self._timestamp()
-                )
-            else:
-                assistant_bubble.set_content(error_message)
-            self.sub_title = "Connection error"
+        except OllamaConnectionError:
+            await self._handle_stream_error(
+                assistant_bubble,
+                "Connection error. Verify Ollama service and host configuration.",
+                "Connection error",
+            )
         except OllamaModelNotFoundError:
-            await self._transition_state(ConversationState.ERROR)
-            error_message = "Model not found. Verify the configured ollama.model value."
-            if assistant_bubble is None:
-                assistant_bubble = await self._add_message(
-                    content=error_message, role="assistant", timestamp=self._timestamp()
-                )
-            else:
-                assistant_bubble.set_content(error_message)
-            self.sub_title = "Model not found"
+            await self._handle_stream_error(
+                assistant_bubble,
+                "Model not found. Verify the configured ollama.model value.",
+                "Model not found",
+            )
         except OllamaStreamingError:
-            await self._transition_state(ConversationState.ERROR)
-            error_message = "Streaming error. Please retry your message."
-            if assistant_bubble is None:
-                assistant_bubble = await self._add_message(
-                    content=error_message, role="assistant", timestamp=self._timestamp()
-                )
-            else:
-                assistant_bubble.set_content(error_message)
-            self.sub_title = "Streaming error"
+            await self._handle_stream_error(
+                assistant_bubble,
+                "Streaming error. Please retry your message.",
+                "Streaming error",
+            )
         except OllamaChatError:
-            await self._transition_state(ConversationState.ERROR)
-            error_message = "Chat error. Please review settings and try again."
-            if assistant_bubble is None:
-                assistant_bubble = await self._add_message(
-                    content=error_message, role="assistant", timestamp=self._timestamp()
-                )
-            else:
-                assistant_bubble.set_content(error_message)
-            self.sub_title = "Chat error"
+            await self._handle_stream_error(
+                assistant_bubble,
+                "Chat error. Please review settings and try again.",
+                "Chat error",
+            )
         finally:
             input_widget.disabled = False
             send_button.disabled = False

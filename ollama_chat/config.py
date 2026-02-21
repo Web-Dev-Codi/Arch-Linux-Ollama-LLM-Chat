@@ -21,10 +21,7 @@ from pydantic import (
 
 from .exceptions import ConfigValidationError
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - compatibility path for older Python.
-    import tomli as tomllib  # type: ignore[no-redef]
+import tomllib  # stdlib since Python 3.11 (project requires >=3.11)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -361,10 +358,10 @@ def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
     """
     target_path = config_path or CONFIG_PATH
     ensure_config_dir(target_path.parent)
-    _enforce_private_permissions(target_path)
 
     raw_data: dict[str, Any] = {}
     if target_path.exists():
+        _enforce_private_permissions(target_path)
         try:
             raw_data = tomllib.loads(target_path.read_text(encoding="utf-8"))
         except (
@@ -378,6 +375,4 @@ def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
         if isinstance(raw_data, dict)
         else _safe_default_config()
     )
-    validated = _validate_config(merged)
-    _enforce_private_permissions(target_path)
-    return validated
+    return _validate_config(merged)

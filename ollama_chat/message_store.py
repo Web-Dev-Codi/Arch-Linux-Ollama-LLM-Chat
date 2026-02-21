@@ -28,7 +28,7 @@ class MessageStore:
 
     @property
     def messages(self) -> list[Message]:
-        """Return a copy of all stored messages."""
+        """Return a shallow copy of all stored messages."""
         return [dict(message) for message in self._messages]
 
     @property
@@ -71,23 +71,25 @@ class MessageStore:
         self._messages.append({"role": normalized_role, "content": normalized_content})
         self._trim_by_history_limit()
 
+    @staticmethod
+    def _message_tokens(message: Message) -> int:
+        """Estimate token cost for a single message."""
+        role = message.get("role", "")
+        content = message.get("content", "")
+        role_cost = 2 if role else 0
+        return role_cost + len(content) // 4 + len(content.split()) + 2
+
     def estimated_tokens(self, messages: Iterable[Message] | None = None) -> int:
         """Estimate token count deterministically from message text."""
-        items = list(messages) if messages is not None else self._messages
-        total = 0
-        for message in items:
-            role = message.get("role", "")
-            content = message.get("content", "")
-            role_cost = 2 if role else 0
-            content_cost = len(content) // 4
-            word_cost = len(content.split())
-            total += role_cost + content_cost + word_cost + 2
+        items = self._messages if messages is None else list(messages)
+        total = sum(self._message_tokens(m) for m in items)
         return max(total, 1)
 
     def build_api_context(self, max_context_tokens: int | None = None) -> list[Message]:
         """Build API context while preserving system messages and token limits."""
         limit = max(1, max_context_tokens or self.max_context_tokens)
-        context = self.messages
+        # Shallow-copy each dict so callers can safely mutate the list.
+        context: list[Message] = [dict(m) for m in self._messages]
         self._trim_context_in_place(context, limit)
         return context
 
@@ -110,9 +112,20 @@ class MessageStore:
     def _trim_context_in_place(
         self, context: list[Message], max_context_tokens: int
     ) -> None:
-        while context and self.estimated_tokens(context) > max_context_tokens:
-            removed = self._remove_oldest_non_system(context)
-            if not removed:
+        """Remove oldest non-system messages until token budget is met.
+
+        Token total is maintained incrementally (O(n)) rather than
+        re-computed from scratch on every removal (was O(n²)).
+        """
+        total = sum(self._message_tokens(m) for m in context)
+        while total > max_context_tokens and context:
+            for index, message in enumerate(context):
+                if message.get("role") != "system":
+                    total -= self._message_tokens(message)
+                    del context[index]
+                    break
+            else:
+                # Only system messages remain; cannot trim further.
                 break
 
     @staticmethod

@@ -47,7 +47,7 @@ class ConversationPersistence:
                             rows.append({"path": path_value, "created_at": created_at})
                 return rows
         except Exception:
-            return []
+            pass
         return []
 
     def _write_index(self, rows: list[dict[str, str]]) -> None:
@@ -68,8 +68,9 @@ class ConversationPersistence:
             raise RuntimeError("Persistence is disabled in configuration.")
 
         self._ensure_paths()
-        created_at = datetime.now(timezone.utc).isoformat()
-        filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.json"
+        now = datetime.now(timezone.utc)
+        created_at = now.isoformat()
+        filename = f"{now.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.json"
         target = self.directory / filename
 
         payload: dict[str, Any] = {

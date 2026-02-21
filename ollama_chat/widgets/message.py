@@ -18,6 +18,9 @@ class MessageBubble(Vertical):
     MessageBubble {
         height: auto;
     }
+    MessageBubble > #header-block {
+        padding: 0;
+    }
     MessageBubble > #thinking-block {
         color: $text-muted;
         padding: 0 1;
@@ -52,7 +55,8 @@ class MessageBubble(Vertical):
         self._tool_trace_lines: list[str] = []
         self.add_class(f"role-{role}")
 
-        # Direct references to inner widgets, set in compose() / on_mount().
+        # Direct references to inner widgets, set in compose().
+        self._header_widget: Static | None = None
         self._thinking_widget: Static | None = None
         self._tool_widget: Static | None = None
         self._content_widget: Static | None = None
@@ -64,28 +68,35 @@ class MessageBubble(Vertical):
 
     def _compose_header(self) -> str:
         if self.timestamp:
-            return f"**{self.role_prefix}**  _{self.timestamp}_\n\n"
-        return f"**{self.role_prefix}**\n\n"
+            return f"**{self.role_prefix}**  _{self.timestamp}_"
+        return f"**{self.role_prefix}**"
 
     def compose(self) -> ComposeResult:
-        """Compose the bubble layout with optional thinking/tool sections."""
+        """Compose the bubble layout with separate header, thinking, tool, and content blocks."""
+        # Header is rendered once and never updated during streaming.
+        self._header_widget = Static(
+            Markdown(self._compose_header()), id="header-block"
+        )
         self._thinking_widget = Static("", id="thinking-block")
         self._tool_widget = Static("", id="tool-trace")
         self._content_widget = Static("", id="content-block")
+
+        yield self._header_widget
         if self.show_thinking:
             yield self._thinking_widget
         yield self._tool_widget
         yield self._content_widget
 
     def on_mount(self) -> None:
-        """Perform initial render after mount."""
+        """Perform initial content render after mount."""
         self._refresh_content()
 
     def _refresh_content(self) -> None:
         if self._content_widget is None:
             return
-        full_text = f"{self._compose_header()}{self.message_content}".rstrip()
-        self._content_widget.update(Markdown(full_text))
+        # Only the content (not the static header) is re-parsed on each update.
+        text = self.message_content.rstrip()
+        self._content_widget.update(Markdown(text) if text else "")
 
     def _refresh_thinking(self) -> None:
         if not self.show_thinking or self._thinking_widget is None:
