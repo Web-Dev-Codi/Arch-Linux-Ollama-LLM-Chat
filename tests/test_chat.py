@@ -408,6 +408,39 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(tool_result_chunks) >= 1)
         self.assertIn("Tool error", tool_result_chunks[0].tool_result)
 
+    async def test_omits_unknown_kwargs_for_sdk_signature(self) -> None:
+        """If the SDK chat() does not accept think/tools, they are omitted and streaming works."""
+
+        class NoExtrasClient:
+            async def chat(self, model, messages, stream):  # noqa: D401, ANN001
+                return _chunk_stream([_content_chunk("OK")])
+
+            async def list(self) -> dict[str, list[dict[str, str]]]:  # pragma: no cover
+                return {"models": [{"name": "llama3.2"}]}
+
+        def dummy_tool() -> str:
+            """A no-op tool used to populate the registry."""
+            return "done"
+
+        registry = ToolRegistry()
+        registry.register(dummy_tool)
+
+        chat = OllamaChat(
+            host="http://localhost:11434",
+            model="llama3.2",
+            system_prompt="System",
+            client=NoExtrasClient(),
+        )
+
+        # Even though we request think=True and provide tools, the client signature
+        # does not accept these kwargs; the wrapper should drop them and still stream.
+        chunks: list[ChatChunk] = []
+        async for chunk in chat.send_message("hello", think=True, tool_registry=registry):
+            chunks.append(chunk)
+
+        content = "".join(c.text for c in chunks if c.kind == "content")
+        self.assertEqual(content, "OK")
+
 
 if __name__ == "__main__":
     unittest.main()

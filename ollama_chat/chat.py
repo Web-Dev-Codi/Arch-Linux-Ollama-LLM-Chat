@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 import logging
+import inspect
 from typing import Any, Literal
 
 from .exceptions import (
@@ -28,6 +29,11 @@ except (
     ModuleNotFoundError
 ):  # pragma: no cover - exercised only in missing dependency environments.
     _AsyncClient = None  # type: ignore[misc,assignment]
+
+try:
+    import ollama as _ollama_pkg
+except ModuleNotFoundError:  # pragma: no cover - optional runtime detail for logging
+    _ollama_pkg = None  # type: ignore[assignment]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +84,30 @@ class OllamaChat:
             system_prompt=system_prompt,
             max_history_messages=max_history_messages,
             max_context_tokens=max_context_tokens,
+        )
+
+        try:
+            self._chat_param_names = set(
+                inspect.signature(self._client.chat).parameters.keys()
+            )
+        except Exception:
+            self._chat_param_names = set()
+
+        try:
+            sdk_version = (
+                getattr(_ollama_pkg, "__version__", "unknown")
+                if _ollama_pkg is not None
+                else "not installed"
+            )
+        except Exception:
+            sdk_version = "unknown"
+        LOGGER.info(
+            "chat.sdk.signature",
+            extra={
+                "event": "chat.sdk.signature",
+                "sdk_version": sdk_version,
+                "supported_params": sorted(self._chat_param_names),
+            },
         )
 
     @property
@@ -298,6 +328,11 @@ class OllamaChat:
             kwargs["think"] = True
         if tools:
             kwargs["tools"] = tools
+
+        if "think" not in self._chat_param_names:
+            kwargs.pop("think", None)
+        if "tools" not in self._chat_param_names:
+            kwargs.pop("tools", None)
 
         stream = await self._client.chat(**kwargs)
         async for chunk in stream:

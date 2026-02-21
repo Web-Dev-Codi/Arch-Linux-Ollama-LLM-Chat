@@ -1,120 +1,224 @@
 # Ollama Chat TUI
 
-`ollama-chat-tui` is your local AI cockpit in the terminal: fast, private, and gloriously cloud-free.
-Talk to Ollama models with a slick ChatGPT-style TUI, live streaming replies, clickable model switching, and keyboard-first controls.
-Best part: once your models are pulled, you can keep chatting even when your internet is having a meltdown.
+> **A keyboard-first, fully local AI chat interface for the terminal.**  
+> Powered by [Ollama](https://ollama.com/) and [Textual](https://github.com/Textualize/textual) — no cloud, no API keys, no data leaving your machine.
 
-No API keys. No surprise bills. No sending your conversations to someone else's server. Just you, your machine, and your LLMs.
+```
+┌─────────────────────────────────────────────────────────┐
+│  Ollama Chat                        [llama3.2] ● Online │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  You  ────────────────────────────────────────────────  │
+│  Explain async/await in Python in one paragraph.        │
+│                                                         │
+│  Assistant  ──────────────────────────────────────────  │
+│  async/await is Python's syntax for writing coroutines  │
+│  — functions that can pause execution with `await`,     │
+│  yielding control back to the event loop while waiting  │
+│  for I/O, then resuming where they left off...          │
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│  > Type a message...                     ctrl+p for help│
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Table of Contents
+
+- [Why Ollama Chat TUI?](#why-ollama-chat-tui)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+  - [Config File Location](#config-file-location)
+  - [All Options](#all-options)
+- [Keybinds](#keybinds)
+- [Capabilities](#capabilities)
+- [Desktop Integration](#desktop-integration)
+  - [Hyprland + Ghostty](#hyprland--ghostty)
+  - [Desktop Entry](#desktop-entry)
+- [Packaging](#packaging)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Why Ollama Chat TUI?
+
+| | Ollama Chat TUI | Web-based chat UIs |
+|---|---|---|
+| **Privacy** | 100% local — data never leaves your machine | Depends on provider |
+| **Offline use** | Works after initial model pull | Requires internet |
+| **Cost** | Free (you own the hardware) | Often metered |
+| **Speed** | No network latency to the model | Round-trip to cloud |
+| **Customization** | Full TOML config, rebindable keys | Usually limited |
+| **Terminal native** | Keyboard-first, scriptable | Browser tab |
+
+---
 
 ## Features
 
-- Fully local LLM chat via Ollama with no cloud dependency.
-- Works offline after models are pulled.
-- Streaming responses with batched rendering for smooth output.
-- Animated in-bubble "thinking" placeholders while responses start.
-- Interactive status bar with traffic-light connection indicators.
-- Clickable model picker in the status bar, plus `ctrl+m` shortcut.
-- Built-in command palette shortcut (`ctrl+p`) with UI hints in header/footer.
-- Multi-model config support with quick runtime model switching.
-- Save/load/export conversation history (JSON and Markdown).
-- Search messages and cycle results from the input box.
-- Copy the latest assistant reply to clipboard in one shortcut.
-- Lock-protected app state machine with cancellation-safe reset/shutdown.
-- Bounded message history with deterministic context token trimming.
-- Retry and backoff for resilient streaming on transient failures.
-- Secure-by-default host allowlist for Ollama endpoint safety.
-- Structured logging with optional file logging for debugging/ops.
-- Configurable app settings, keybinds, UI, security, and logging via TOML.
-- Terminal title and a best-effort window class are set by the app on startup.
-- Python package with console entrypoint: `ollama-chat`.
+### Core Chat
+
+- **Streaming responses** with batched rendering for smooth, flicker-free output
+- **Animated "thinking" placeholder** shown while the model starts generating
+- **Bounded context window** — automatically trims history to stay within token limits
+- **Retry with backoff** for resilient streaming on transient Ollama failures
+
+### Model Management
+
+- **Multi-model config** — list multiple models and switch at runtime
+- **Clickable model picker** in the status bar, or `ctrl+m` keyboard shortcut
+- **Auto-pull on startup** — optionally pull the configured model if it is not present
+- **Traffic-light connection indicator** — always know if Ollama is reachable
+
+### Conversation Persistence
+
+- **Save and load** conversation history (JSON format)
+- **Export** conversations as Markdown transcripts
+- **Search messages** and cycle through results from the input box
+- **Copy** the latest assistant reply to clipboard in one shortcut
+
+### Capabilities (optional)
+
+- **Chain-of-thought reasoning** (`think = true`) for supported models (e.g. `qwen3`, `deepseek-r1`)
+- **Tool calling** and an agent loop for multi-step model actions
+- **Web search** via Ollama's built-in tools (requires Ollama API key)
+- **Vision / image attachments** for vision-capable models (e.g. `gemma3`, `llava`)
+
+### Interface & Integration
+
+- **Command palette** (`ctrl+p`) with searchable list of all actions
+- **Fully configurable keybinds** via TOML
+- **Structured JSON logging** with optional file output for debugging
+- **Terminal title** and window class set on startup for WM rules
+- **Desktop entry** and Hyprland/Ghostty integration examples included
+
+---
 
 ## Requirements
 
-- Python 3.11+
-- Ollama installed and available in `PATH`
-- Ollama daemon available locally (`ollama serve`)
-- Internet is only needed to pull models initially; chat usage can be offline afterward
+| Requirement | Details |
+|---|---|
+| Python | 3.11 or newer |
+| Ollama | Installed and on your `PATH` ([install guide](https://ollama.com/download)) |
+| Ollama daemon | Running — `ollama serve` |
+| Internet | Only needed once, to pull models |
+
+---
 
 ## Installation
 
-### Quick start (recommended)
+### From source (recommended)
 
 ```bash
 git clone https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat.git
 cd Arch-Linux-Ollama-LLM-Chat
+
 python -m venv .venv
 source .venv/bin/activate
+
 pip install -e .
 ```
 
-### Install modes
+### Developer / contributor install
 
-- **Standard use**: `pip install -e .`
-- **Contributor/dev mode**: `pip install -e '.[dev]'`
+Includes test runners, linter, formatter, and type checker:
 
-## Run and use the app
+```bash
+pip install -e '.[dev]'
+```
 
-### 1) Start Ollama and pull a model
+### Arch Linux (PKGBUILD)
+
+A `PKGBUILD` is included for building a native Arch package:
+
+```bash
+makepkg -si
+```
+
+---
+
+## Quick Start
+
+**1. Start Ollama and pull a model**
 
 ```bash
 ollama serve
 ollama pull llama3.2
 ```
 
-### 2) Optional: create your config file
+**2. (Optional) Copy the example config**
 
-Defaults are loaded automatically, but you can start from the example:
+The app works out of the box with sensible defaults. To customize:
 
 ```bash
 mkdir -p ~/.config/ollama-chat
 cp config.example.toml ~/.config/ollama-chat/config.toml
 ```
 
-### 3) Launch the TUI
+**3. Launch the app**
 
 ```bash
 ollama-chat
-```
-
-Alternative entrypoint:
-
-```bash
+# or
 python -m ollama_chat
 ```
 
-### 4) Basic workflow
+**4. Basic workflow**
 
-- Type your prompt in the input field.
-- Press `ctrl+enter` to send.
-- Click `Model` in the status bar to pick a configured model.
-- Use `ctrl+n` to start a new conversation.
-- Use `ctrl+q` to quit.
+| Action | How |
+|---|---|
+| Send a message | Type in the input field → `ctrl+enter` |
+| Switch model | Click `Model` in the status bar, or `ctrl+m` |
+| New conversation | `ctrl+n` |
+| Search messages | `ctrl+f`, type query, press again to cycle |
+| Copy last reply | `ctrl+y` |
+| Open all actions | `ctrl+p` |
+| Quit | `ctrl+q` |
+
+---
 
 ## Configuration
 
-Configuration file location:
+### Config File Location
 
-`~/.config/ollama-chat/config.toml`
+```
+~/.config/ollama-chat/config.toml
+```
 
-If the file does not exist, defaults are used automatically.  
-Use `config.example.toml` as a starting point.
+If the file does not exist, built-in defaults are used automatically.  
+Use `config.example.toml` from the repo as your starting point.
 
-Example:
+### All Options
 
 ```toml
 [app]
+# Window title shown in the TUI header
 title = "Ollama Chat"
+# WM window class set on startup (useful for Hyprland/i3 rules)
 class = "ollama-chat-tui"
+# How often (seconds) to check Ollama connectivity
 connection_check_interval_seconds = 15
 
 [ollama]
+# Ollama API endpoint
 host = "http://localhost:11434"
+# Default active model
 model = "llama3.2"
+# All models available in the picker
 models = ["llama3.2", "qwen2.5", "mistral"]
+# Request timeout in seconds
 timeout = 120
+# System prompt injected at the start of every conversation
 system_prompt = "You are a helpful assistant."
+# Maximum messages kept in history
 max_history_messages = 200
+# Token budget for context trimming
 max_context_tokens = 4096
+# Pull the model on startup if not present locally
 pull_model_on_start = true
 
 [ui]
@@ -124,6 +228,7 @@ user_message_color = "#7aa2f7"
 assistant_message_color = "#9ece6a"
 border_color = "#565f89"
 show_timestamps = true
+# Number of streaming chunks to buffer before rendering
 stream_chunk_size = 8
 
 [keybinds]
@@ -141,12 +246,13 @@ search_messages = "ctrl+f"
 copy_last_message = "ctrl+y"
 
 [security]
+# Set true to allow non-localhost Ollama endpoints
 allow_remote_hosts = false
 allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 
 [logging]
-level = "INFO"
-structured = true
+level = "INFO"          # DEBUG | INFO | WARNING | ERROR
+structured = true       # JSON-formatted log lines
 log_to_file = false
 log_file_path = "~/.local/state/ollama-chat/app.log"
 
@@ -154,84 +260,165 @@ log_file_path = "~/.local/state/ollama-chat/app.log"
 enabled = false
 directory = "~/.local/state/ollama-chat/conversations"
 metadata_path = "~/.local/state/ollama-chat/conversations/index.json"
+
+[capabilities]
+# Chain-of-thought reasoning (models: qwen3, deepseek-r1, deepseek-v3.1)
+think = true
+# Display the reasoning trace inside the assistant bubble
+show_thinking = true
+# Enable the tool-calling agent loop
+tools_enabled = true
+# Built-in web_search / web_fetch (requires OLLAMA_API_KEY)
+web_search_enabled = false
+web_search_api_key = ""
+# Vision / image attachments (models: gemma3, llava)
+# Use /image <path> or click Attach
+vision_enabled = true
+# Max tool-call iterations per message before the loop stops
+max_tool_iterations = 10
 ```
+
+---
 
 ## Keybinds
 
-Default keybinds:
+All keybinds are rebindable in `[keybinds]`. These are the defaults:
 
-- `ctrl+enter`: Send message
-- `ctrl+n`: New conversation
-- `ctrl+q`: Quit
-- `ctrl+k`: Scroll up
-- `ctrl+j`: Scroll down
-- `ctrl+p`: Open command palette
-- `ctrl+m`: Open configured model picker
-- `ctrl+s`: Save conversation (requires `[persistence].enabled = true`)
-- `ctrl+l`: Load latest saved conversation (requires persistence enabled)
-- `ctrl+e`: Export markdown transcript (requires persistence enabled)
-- `ctrl+f`: Search messages (type query in input box, then press again to cycle)
-- `ctrl+y`: Copy last assistant message to clipboard
+| Keybind | Action |
+|---|---|
+| `ctrl+enter` | Send message |
+| `ctrl+n` | New conversation |
+| `ctrl+q` | Quit |
+| `ctrl+k` | Scroll up |
+| `ctrl+j` | Scroll down |
+| `ctrl+p` | Open command palette |
+| `ctrl+m` | Open model picker |
+| `ctrl+s` | Save conversation *(requires persistence enabled)* |
+| `ctrl+l` | Load latest saved conversation *(requires persistence enabled)* |
+| `ctrl+e` | Export Markdown transcript *(requires persistence enabled)* |
+| `ctrl+f` | Search messages (press again to cycle results) |
+| `ctrl+y` | Copy last assistant message to clipboard |
 
-## Hyprland + Ghostty integration
+---
 
-The app now attempts to set terminal window class on startup using `app.class` from config.
-For the most reliable behavior (especially on Wayland-native terminals), still pass class in the launcher command (for example Ghostty `--class`).
+## Capabilities
 
-Launch directly with a class:
+### Chain-of-thought reasoning
+
+Enable `think = true` in `[capabilities]` for models that support it
+(e.g. `qwen3`, `deepseek-r1`). The model's internal reasoning trace is shown
+above its final answer when `show_thinking = true`.
+
+### Tool calling
+
+Set `tools_enabled = true` to activate the agent loop. The model can invoke
+tools multiple times before producing a final answer.
+
+### Web search
+
+Set `web_search_enabled = true` and provide an Ollama API key (via
+`web_search_api_key` or the `OLLAMA_API_KEY` environment variable) to allow
+the model to search and fetch web pages during a response.
+
+### Vision / image attachments
+
+Set `vision_enabled = true` and use a vision-capable model (e.g. `gemma3`,
+`llava`). Attach images with `/image <path>` in the input box.
+
+---
+
+## Desktop Integration
+
+### Hyprland + Ghostty
+
+The app sets the terminal window class from `app.class` on startup.
+For the most reliable behavior on Wayland, also pass the class directly to
+your terminal:
 
 ```bash
 ghostty --class=ollama-chat-tui -e ollama-chat
 ```
 
-Example Hyprland rules:
+Suggested Hyprland window rules (`~/.config/hypr/hyprland.conf`):
 
 ```conf
-windowrulev2 = float, class:^(ollama-chat-tui)$
-windowrulev2 = size 1200 800, class:^(ollama-chat-tui)$
-windowrulev2 = center, class:^(ollama-chat-tui)$
-windowrulev2 = opacity 0.95, class:^(ollama-chat-tui)$
+windowrulev2 = float,          class:^(ollama-chat-tui)$
+windowrulev2 = size 1200 800,  class:^(ollama-chat-tui)$
+windowrulev2 = center,         class:^(ollama-chat-tui)$
+windowrulev2 = opacity 0.95,   class:^(ollama-chat-tui)$
+
 bind = $mainMod, O, exec, ghostty --class=ollama-chat-tui -e ollama-chat
 ```
 
-## Desktop entry example
+### Desktop Entry
 
-`~/.local/share/applications/ollama-chat.desktop`
+Create `~/.local/share/applications/ollama-chat.desktop`:
 
 ```desktop
 [Desktop Entry]
 Type=Application
 Name=Ollama Chat
-Comment=ChatGPT-style TUI for Ollama
+Comment=ChatGPT-style TUI for Ollama local LLMs
 Exec=ghostty --class=ollama-chat-tui -e ollama-chat
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;TerminalEmulator;Development;
 ```
 
+---
+
 ## Packaging
 
-- Python packaging is configured in `pyproject.toml`.
-- Arch packaging example is included as `PKGBUILD`.
+| Format | Instructions |
+|---|---|
+| Python wheel | `python -m build --wheel --no-isolation` |
+| Arch Linux | `makepkg -si` (uses included `PKGBUILD`) |
 
-## Testing
+Build configuration lives in `pyproject.toml`.
 
-Run tests:
+---
+
+## Development
 
 ```bash
+# Full test suite
 pytest -q
+
+# With coverage report
+pytest --cov=ollama_chat --cov-report=term-missing -q
+
+# Lint
+ruff check .
+
+# Format check
+black --check .
+
+# Type check
+mypy ollama_chat/
 ```
+
+Run all checks before submitting changes:
+
+```bash
+ruff check . && black --check . && mypy ollama_chat/ && pytest -q
+```
+
+---
 
 ## Troubleshooting
 
-- `Connection error`: Ensure `ollama serve` is running and `ollama.host` points to the correct endpoint.
-- Startup says model is missing: keep `ollama.pull_model_on_start = true` or run `ollama pull <model>` manually.
-- Empty assistant response: verify the model name exists (`ollama list`) and check Ollama logs.
-- Keybind not working: confirm syntax in `[keybinds]` and restart the app.
-- UI colors not applied as expected: validate hex color format (`#RRGGBB` or `#RGB`).
-- Window class rule not matching: keep `app.class` set, and prefer launching terminal with explicit class flag (for example `ghostty --class=ollama-chat-tui -e ollama-chat`).
+| Symptom | Fix |
+|---|---|
+| `Connection error` on startup | Ensure `ollama serve` is running; verify `ollama.host` in config |
+| "Model not found" warning | Set `pull_model_on_start = true`, or run `ollama pull <model>` manually |
+| Empty or cut-off response | Check `ollama list` to confirm the model name; review Ollama logs |
+| Keybind not responding | Verify the syntax in `[keybinds]` and restart the app |
+| Colors not applied | Use valid hex format: `#RRGGBB` or `#RGB` |
+| Window class rule not matching | Ensure `app.class` is set; prefer launching with `ghostty --class=ollama-chat-tui` |
+| Tool loop not stopping | Lower `max_tool_iterations` in `[capabilities]` |
 
-## Screenshot / Demo
+---
 
-- Screenshot placeholder: `docs/screenshot.png`
-- Demo GIF placeholder: `docs/demo.gif`
+## License
+
+[MIT](LICENSE) — © Web-Dev-Codi

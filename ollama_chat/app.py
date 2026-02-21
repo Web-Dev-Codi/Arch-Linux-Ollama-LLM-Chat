@@ -322,10 +322,20 @@ class OllamaChatApp(App[None]):
 
         # Build the tool registry based on capabilities.
         if self._cap_tools_enabled:
-            self._tool_registry: ToolRegistry | None = build_default_registry(
-                web_search_enabled=self._cap_web_search_enabled,
-                web_search_api_key=self._cap_web_search_api_key,
-            )
+            try:
+                self._tool_registry: ToolRegistry | None = build_default_registry(
+                    web_search_enabled=self._cap_web_search_enabled,
+                    web_search_api_key=self._cap_web_search_api_key,
+                )
+            except OllamaToolError as exc:
+                LOGGER.warning(
+                    "app.tools.disabled",
+                    extra={
+                        "event": "app.tools.disabled",
+                        "reason": str(exc),
+                    },
+                )
+                self._tool_registry = None
         else:
             self._tool_registry = None
 
@@ -969,10 +979,10 @@ class OllamaChatApp(App[None]):
             await self._handle_stream_error(
                 assistant_bubble, f"Tool error: {exc}", "Tool execution error"
             )
-        except OllamaConnectionError:
+        except OllamaConnectionError as exc:
             await self._handle_stream_error(
                 assistant_bubble,
-                "Connection error. Verify Ollama service and host configuration.",
+                f"Connection error: {exc}",
                 "Connection error",
             )
         except OllamaModelNotFoundError:
@@ -981,10 +991,10 @@ class OllamaChatApp(App[None]):
                 "Model not found. Verify the configured ollama.model value.",
                 "Model not found",
             )
-        except OllamaStreamingError:
+        except OllamaStreamingError as exc:
             await self._handle_stream_error(
                 assistant_bubble,
-                "Streaming error. Please retry your message.",
+                f"Streaming error: {exc}",
                 "Streaming error",
             )
         except OllamaChatError:
