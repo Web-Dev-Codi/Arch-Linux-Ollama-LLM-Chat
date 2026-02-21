@@ -21,11 +21,15 @@ class StateManagerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transition_if_enforces_expected_state(self) -> None:
         manager = StateManager()
-        changed = await manager.transition_if(ConversationState.STREAMING, ConversationState.ERROR)
+        changed = await manager.transition_if(
+            ConversationState.STREAMING, ConversationState.ERROR
+        )
         self.assertFalse(changed)
         self.assertEqual(await manager.get_state(), ConversationState.IDLE)
 
-        changed = await manager.transition_if(ConversationState.IDLE, ConversationState.STREAMING)
+        changed = await manager.transition_if(
+            ConversationState.IDLE, ConversationState.STREAMING
+        )
         self.assertTrue(changed)
         self.assertEqual(await manager.get_state(), ConversationState.STREAMING)
 
@@ -34,7 +38,9 @@ class StateManagerTests(unittest.IsolatedAsyncioTestCase):
 
         async def try_enter_streaming() -> bool:
             await asyncio.sleep(0)
-            return await manager.transition_if(ConversationState.IDLE, ConversationState.STREAMING)
+            return await manager.transition_if(
+                ConversationState.IDLE, ConversationState.STREAMING
+            )
 
         results = await asyncio.gather(*(try_enter_streaming() for _ in range(10)))
         self.assertEqual(sum(1 for result in results if result), 1)

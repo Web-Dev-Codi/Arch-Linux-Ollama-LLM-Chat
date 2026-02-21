@@ -45,7 +45,9 @@ def __getattr__(name: str) -> Any:
     if name in {"ensure_config_dir", "load_config"}:
         from .config import ensure_config_dir, load_config
 
-        return {"ensure_config_dir": ensure_config_dir, "load_config": load_config}[name]
+        return {"ensure_config_dir": ensure_config_dir, "load_config": load_config}[
+            name
+        ]
     if name in {
         "ConfigValidationError",
         "OllamaChatError",
@@ -71,7 +73,9 @@ def __getattr__(name: str) -> Any:
     if name in {"ConversationState", "StateManager"}:
         from .state import ConversationState, StateManager
 
-        return {"ConversationState": ConversationState, "StateManager": StateManager}[name]
+        return {"ConversationState": ConversationState, "StateManager": StateManager}[
+            name
+        ]
     if name == "MessageStore":
         from .message_store import MessageStore
 

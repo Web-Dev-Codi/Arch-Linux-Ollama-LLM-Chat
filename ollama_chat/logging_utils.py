@@ -60,7 +60,9 @@ def _best_effort_private_permissions(path: Path) -> None:
     try:
         path.chmod(0o600)
     except OSError:
-        logging.getLogger(__name__).warning("Unable to enforce 0600 permissions for %s", path)
+        logging.getLogger(__name__).warning(
+            "Unable to enforce 0600 permissions for %s", path
+        )
 
 
 def configure_logging(logging_config: dict[str, Any]) -> None:
@@ -69,7 +71,9 @@ def configure_logging(logging_config: dict[str, Any]) -> None:
     level = getattr(logging, level_name, logging.INFO)
     structured = bool(logging_config.get("structured", True))
     log_to_file = bool(logging_config.get("log_to_file", False))
-    log_file_path = str(logging_config.get("log_file_path", "~/.local/state/ollama-chat/app.log"))
+    log_file_path = str(
+        logging_config.get("log_file_path", "~/.local/state/ollama-chat/app.log")
+    )
 
     root = logging.getLogger()
     root.setLevel(level)

@@ -77,7 +77,10 @@ class ConversationPersistence:
             "model": model,
             "messages": messages,
         }
-        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         self._enforce_private_permissions(target)
 
         index_rows = self._read_index()

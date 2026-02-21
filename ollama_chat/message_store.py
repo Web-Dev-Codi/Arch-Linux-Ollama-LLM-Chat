@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Iterable
 
-
 Message = dict[str, str]
 
 
@@ -22,7 +21,9 @@ class MessageStore:
         self.max_context_tokens = max(1, max_context_tokens)
         self._base_messages: list[Message] = []
         if system_prompt.strip():
-            self._base_messages.append({"role": "system", "content": system_prompt.strip()})
+            self._base_messages.append(
+                {"role": "system", "content": system_prompt.strip()}
+            )
         self._messages: list[Message] = list(self._base_messages)
 
     @property
@@ -52,7 +53,10 @@ class MessageStore:
             self.clear()
             return
 
-        if not any(item.get("role") == "system" for item in normalized_messages) and self._base_messages:
+        if (
+            not any(item.get("role") == "system" for item in normalized_messages)
+            and self._base_messages
+        ):
             normalized_messages = list(self._base_messages) + normalized_messages
 
         self._messages = normalized_messages
@@ -93,7 +97,9 @@ class MessageStore:
             {"role": message.get("role", ""), "content": message.get("content", "")}
             for message in self._messages
         ]
-        return json.dumps(stable_messages, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+        return json.dumps(
+            stable_messages, ensure_ascii=False, separators=(",", ":"), sort_keys=False
+        )
 
     def _trim_by_history_limit(self) -> None:
         while len(self._messages) > self.max_history_messages:
@@ -101,7 +107,9 @@ class MessageStore:
             if not removed:
                 self._messages.pop(0)
 
-    def _trim_context_in_place(self, context: list[Message], max_context_tokens: int) -> None:
+    def _trim_context_in_place(
+        self, context: list[Message], max_context_tokens: int
+    ) -> None:
         while context and self.estimated_tokens(context) > max_context_tokens:
             removed = self._remove_oldest_non_system(context)
             if not removed:

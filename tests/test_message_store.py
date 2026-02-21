@@ -12,7 +12,9 @@ class MessageStoreTests(unittest.TestCase):
     """Validate Tier 1 message storage requirements."""
 
     def test_max_history_messages_is_enforced(self) -> None:
-        store = MessageStore(system_prompt="system", max_history_messages=4, max_context_tokens=10_000)
+        store = MessageStore(
+            system_prompt="system", max_history_messages=4, max_context_tokens=10_000
+        )
         store.append("user", "one")
         store.append("assistant", "two")
         store.append("user", "three")
@@ -23,7 +25,9 @@ class MessageStoreTests(unittest.TestCase):
         self.assertEqual(store.messages[1]["content"], "two")
 
     def test_context_trim_preserves_system_message(self) -> None:
-        store = MessageStore(system_prompt="system", max_history_messages=10, max_context_tokens=10_000)
+        store = MessageStore(
+            system_prompt="system", max_history_messages=10, max_context_tokens=10_000
+        )
         store.append("user", "alpha beta gamma delta epsilon")
         store.append("assistant", "alpha beta gamma delta epsilon")
         store.append("user", "alpha beta gamma delta epsilon")
@@ -34,7 +38,9 @@ class MessageStoreTests(unittest.TestCase):
         self.assertLessEqual(store.estimated_tokens(context), 6)
 
     def test_token_estimation_is_deterministic(self) -> None:
-        store = MessageStore(system_prompt="system", max_history_messages=10, max_context_tokens=10_000)
+        store = MessageStore(
+            system_prompt="system", max_history_messages=10, max_context_tokens=10_000
+        )
         store.append("user", "hello world")
         store.append("assistant", "hello world again")
 
@@ -43,7 +49,9 @@ class MessageStoreTests(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_export_json_uses_stable_structure(self) -> None:
-        store = MessageStore(system_prompt="system", max_history_messages=10, max_context_tokens=10_000)
+        store = MessageStore(
+            system_prompt="system", max_history_messages=10, max_context_tokens=10_000
+        )
         store.append("user", "hello")
         raw = store.export_json()
         parsed = json.loads(raw)

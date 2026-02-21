@@ -50,3 +50,30 @@ log_file_path = "~/.local/state/ollama-chat/app.log"
 enabled = false
 directory = "~/.local/state/ollama-chat/conversations"
 metadata_path = "~/.local/state/ollama-chat/conversations/index.json"
+
+[capabilities]
+# Enable chain-of-thought reasoning (think=True in API call).
+# Supported by models like qwen3, deepseek-r1, deepseek-v3.1.
+think = true
+
+# Show the reasoning trace in the assistant bubble (plain preformatted text).
+show_thinking = true
+
+# Enable tool calling and the agent loop.
+# The model may call tools multiple times before producing a final answer.
+tools_enabled = true
+
+# Enable Ollama's built-in web_search and web_fetch tools.
+# Requires OLLAMA_API_KEY to be set (or web_search_api_key below).
+# See: https://ollama.com/settings/keys
+web_search_enabled = false
+
+# API key for Ollama web search. If empty, falls back to OLLAMA_API_KEY env var.
+web_search_api_key = ""
+
+# Enable image attachments for vision-capable models (e.g. gemma3, llava).
+# Use /image <path> in the input box or click the Attach button.
+vision_enabled = true
+
+# Maximum number of tool-call iterations per message before stopping the loop.
+max_tool_iterations = 10

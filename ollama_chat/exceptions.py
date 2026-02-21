@@ -21,3 +21,7 @@ class OllamaStreamingError(OllamaChatError):
 
 class ConfigValidationError(OllamaChatError):
     """Raised when configuration cannot be validated safely."""
+
+
+class OllamaToolError(OllamaChatError):
+    """Raised when a tool call fails during execution."""

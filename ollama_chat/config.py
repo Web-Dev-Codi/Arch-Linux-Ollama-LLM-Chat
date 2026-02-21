@@ -241,6 +241,25 @@ class PersistenceConfig(BaseModel):
         return normalized
 
 
+class CapabilitiesConfig(BaseModel):
+    """Extended model capability flags for thinking, tools, web search, and vision."""
+
+    think: bool = True
+    show_thinking: bool = True
+    tools_enabled: bool = True
+    web_search_enabled: bool = False
+    web_search_api_key: str = ""
+    vision_enabled: bool = True
+    max_tool_iterations: int = Field(default=10, ge=1, le=100)
+
+    @field_validator("web_search_api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("web_search_api_key must be a string.")
+        return value.strip()
+
+
 class Config(BaseModel):
     """Root configuration model for all sections."""
 
@@ -252,6 +271,7 @@ class Config(BaseModel):
     security: SecurityConfig = SecurityConfig()
     logging: LoggingConfig = LoggingConfig()
     persistence: PersistenceConfig = PersistenceConfig()
+    capabilities: CapabilitiesConfig = CapabilitiesConfig()
 
     @model_validator(mode="after")
     def _validate_security_policy(self) -> Config:
@@ -347,7 +367,9 @@ def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
     if target_path.exists():
         try:
             raw_data = tomllib.loads(target_path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 - we must not crash on invalid user config.
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - we must not crash on invalid user config.
             LOGGER.warning("Failed to parse config at %s: %s", target_path, exc)
             raw_data = {}
 

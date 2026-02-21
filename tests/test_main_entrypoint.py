@@ -12,9 +12,10 @@ class MainEntrypointTests(unittest.TestCase):
     """Validate top-level main() behavior."""
 
     def test_main_ensures_config_and_runs_app(self) -> None:
-        with patch("ollama_chat.__main__.ensure_config_dir") as ensure_mock, patch(
-            "ollama_chat.__main__.OllamaChatApp"
-        ) as app_cls_mock:
+        with (
+            patch("ollama_chat.__main__.ensure_config_dir") as ensure_mock,
+            patch("ollama_chat.__main__.OllamaChatApp") as app_cls_mock,
+        ):
             app_instance = app_cls_mock.return_value
             main()
             ensure_mock.assert_called_once()

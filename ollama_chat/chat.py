@@ -1,17 +1,19 @@
-"""Async Ollama chat client wrapper with streaming support."""
+"""Async Ollama chat client wrapper with streaming, thinking, tools, and vision support."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from .exceptions import (
     OllamaChatError,
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaStreamingError,
+    OllamaToolError,
 )
 from .message_store import MessageStore
 
@@ -22,10 +24,23 @@ except ModuleNotFoundError:  # pragma: no cover - optional transport dependency.
 
 try:
     from ollama import AsyncClient as _AsyncClient
-except ModuleNotFoundError:  # pragma: no cover - exercised only in missing dependency environments.
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised only in missing dependency environments.
     _AsyncClient = None  # type: ignore[misc,assignment]
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class ChatChunk:
+    """A single typed chunk yielded during a streaming agent-loop response."""
+
+    kind: Literal["thinking", "content", "tool_call", "tool_result"]
+    text: str = ""
+    tool_name: str = ""
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    tool_result: str = ""
 
 
 class OllamaChat:
@@ -55,7 +70,9 @@ class OllamaChat:
         elif _AsyncClient is not None:
             self._client = _AsyncClient(host=host, timeout=timeout)
         else:
-            raise OllamaConnectionError("The ollama package is not installed. Install dependencies with pip install -e .")
+            raise OllamaConnectionError(
+                "The ollama package is not installed. Install dependencies with pip install -e ."
+            )
 
         self.message_store = MessageStore(
             system_prompt=system_prompt,
@@ -64,7 +81,7 @@ class OllamaChat:
         )
 
     @property
-    def messages(self) -> list[dict[str, str]]:
+    def messages(self) -> list[dict[str, Any]]:
         """Expose message history for UI and tests."""
         return self.message_store.messages
 
@@ -133,7 +150,10 @@ class OllamaChat:
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
-        if any(self._model_name_matches(self.model, available) for available in available_models):
+        if any(
+            self._model_name_matches(self.model, available)
+            for available in available_models
+        ):
             LOGGER.info(
                 "chat.model.ready",
                 extra={"event": "chat.model.ready", "model": self.model},
@@ -141,7 +161,9 @@ class OllamaChat:
             return True
 
         if not pull_if_missing:
-            raise OllamaModelNotFoundError(f"Configured model {self.model!r} is not available.")
+            raise OllamaModelNotFoundError(
+                f"Configured model {self.model!r} is not available."
+            )
 
         LOGGER.info(
             "chat.model.pull.start",
@@ -202,6 +224,62 @@ class OllamaChat:
                 return content
         return ""
 
+    @staticmethod
+    def _extract_chunk_thinking(chunk: Any) -> str:
+        """Extract streamed thinking text from an Ollama chunk payload."""
+        message_obj = getattr(chunk, "message", None)
+        if message_obj is not None:
+            thinking = getattr(message_obj, "thinking", None)
+            if isinstance(thinking, str):
+                return thinking
+
+        if hasattr(chunk, "model_dump"):
+            try:
+                chunk = chunk.model_dump()
+            except Exception:
+                pass
+        elif hasattr(chunk, "dict"):
+            try:
+                chunk = chunk.dict()
+            except Exception:
+                pass
+
+        if isinstance(chunk, dict):
+            message = chunk.get("message")
+            if isinstance(message, dict):
+                thinking = message.get("thinking")
+                if isinstance(thinking, str):
+                    return thinking
+        return ""
+
+    @staticmethod
+    def _extract_chunk_tool_calls(chunk: Any) -> list[Any]:
+        """Extract tool_calls from an Ollama chunk payload."""
+        message_obj = getattr(chunk, "message", None)
+        if message_obj is not None:
+            tool_calls = getattr(message_obj, "tool_calls", None)
+            if isinstance(tool_calls, list):
+                return tool_calls
+
+        if hasattr(chunk, "model_dump"):
+            try:
+                chunk = chunk.model_dump()
+            except Exception:
+                pass
+        elif hasattr(chunk, "dict"):
+            try:
+                chunk = chunk.dict()
+            except Exception:
+                pass
+
+        if isinstance(chunk, dict):
+            message = chunk.get("message")
+            if isinstance(message, dict):
+                tool_calls = message.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    return tool_calls
+        return []
+
     def _map_exception(self, exc: Exception) -> OllamaChatError:
         if isinstance(exc, OllamaChatError):
             return exc
@@ -209,57 +287,247 @@ class OllamaChat:
         lower_message = str(exc).lower()
 
         if httpx is not None and isinstance(
-            exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError)
+            exc,
+            (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+                httpx.NetworkError,
+            ),
         ):
-            return OllamaConnectionError(f"Unable to connect to Ollama host {self.host}.")
+            return OllamaConnectionError(
+                f"Unable to connect to Ollama host {self.host}."
+            )
 
         if "model" in lower_message and "not found" in lower_message:
-            return OllamaModelNotFoundError(f"Model {self.model!r} was not found on {self.host}.")
+            return OllamaModelNotFoundError(
+                f"Model {self.model!r} was not found on {self.host}."
+            )
         if "404" in lower_message and "model" in lower_message:
-            return OllamaModelNotFoundError(f"Model {self.model!r} was not found on {self.host}.")
+            return OllamaModelNotFoundError(
+                f"Model {self.model!r} was not found on {self.host}."
+            )
 
-        return OllamaStreamingError(f"Failed to stream response from Ollama at {self.host}: {exc}")
+        return OllamaStreamingError(
+            f"Failed to stream response from Ollama at {self.host}: {exc}"
+        )
 
-    async def _stream_once(self, request_messages: list[dict[str, str]]) -> AsyncGenerator[str, None]:
-        stream = await self._client.chat(model=self.model, messages=request_messages, stream=True)
+    async def _stream_once(
+        self, request_messages: list[dict[str, Any]]
+    ) -> AsyncGenerator[str, None]:
+        stream = await self._client.chat(
+            model=self.model, messages=request_messages, stream=True
+        )
         async for chunk in stream:
             text = self._extract_chunk_text(chunk)
             if text:
                 yield text
 
-    async def send_message(self, user_message: str) -> AsyncGenerator[str, None]:
-        """
-        Send a user message and stream the assistant reply chunk-by-chunk.
+    async def _stream_once_with_capabilities(
+        self,
+        request_messages: list[dict[str, Any]],
+        tools: list[Any],
+        think: bool,
+    ) -> AsyncGenerator[ChatChunk, None]:
+        """Stream a single chat turn, yielding typed ChatChunk objects.
 
-        The user message is appended before streaming starts. On successful completion,
-        the final assistant response is appended to conversation history.
+        Yields thinking, content, and tool_call chunks as they arrive.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": request_messages,
+            "stream": True,
+        }
+        if think:
+            kwargs["think"] = True
+        if tools:
+            kwargs["tools"] = tools
+
+        stream = await self._client.chat(**kwargs)
+        async for chunk in stream:
+            thinking_text = self._extract_chunk_thinking(chunk)
+            if thinking_text:
+                yield ChatChunk(kind="thinking", text=thinking_text)
+
+            content_text = self._extract_chunk_text(chunk)
+            if content_text:
+                yield ChatChunk(kind="content", text=content_text)
+
+            chunk_tool_calls = self._extract_chunk_tool_calls(chunk)
+            for tc in chunk_tool_calls:
+                name, args = self._parse_tool_call(tc)
+                if name:
+                    yield ChatChunk(kind="tool_call", tool_name=name, tool_args=args)
+
+    @staticmethod
+    def _parse_tool_call(tc: Any) -> tuple[str, dict[str, Any]]:
+        """Extract (name, arguments) from a tool call object or dict."""
+        # SDK object: tc.function.name / tc.function.arguments
+        fn = getattr(tc, "function", None)
+        if fn is not None:
+            name = getattr(fn, "name", None) or ""
+            args = getattr(fn, "arguments", None) or {}
+            if not isinstance(args, dict):
+                args = {}
+            return str(name), args
+
+        # Dict-based fallback
+        if isinstance(tc, dict):
+            fn_dict = tc.get("function", {})
+            if isinstance(fn_dict, dict):
+                name = str(fn_dict.get("name", ""))
+                args = fn_dict.get("arguments", {})
+                if not isinstance(args, dict):
+                    args = {}
+                return name, args
+        return "", {}
+
+    async def send_message(
+        self,
+        user_message: str,
+        images: list[str | bytes] | None = None,
+        tool_registry: Any | None = None,
+        think: bool = False,
+        max_tool_iterations: int = 10,
+    ) -> AsyncGenerator[ChatChunk, None]:
+        """Send a user message and stream the assistant reply as typed ChatChunk objects.
+
+        Supports thinking traces, tool calling with a full agent loop, and
+        image attachments for vision-capable models.
+
+        Images are passed to the API but are NOT stored in conversation history.
         """
         normalized = user_message.strip()
-        if not normalized:
+        if not normalized and not images:
             return
 
+        # Build the user message dict; include images only for the API call.
+        user_msg: dict[str, Any] = {"role": "user", "content": normalized}
+        if images:
+            user_msg["images"] = list(images)
+
+        # Persist only the text portion to history (images are ephemeral).
         self.message_store.append("user", normalized)
-        request_messages = self.message_store.build_api_context()
 
-        assistant_parts: list[str] = []
-        for attempt in range(self.retries + 1):
-            try:
-                async for chunk in self._stream_once(request_messages):
-                    assistant_parts.append(chunk)
-                    yield chunk
+        # Build the initial API context; inject images into the last user message.
+        request_messages: list[dict[str, Any]] = list(
+            self.message_store.build_api_context()
+        )
+        if images and request_messages:
+            request_messages[-1] = dict(request_messages[-1])
+            request_messages[-1]["images"] = list(images)
+
+        tools: list[Any] = []
+        if tool_registry is not None and not tool_registry.is_empty:
+            tools = tool_registry.build_tools_list()
+
+        # Accumulated assistant message parts (for history persistence).
+        accumulated_thinking = ""
+        accumulated_content = ""
+        accumulated_tool_calls: list[dict[str, Any]] = []
+
+        for iteration in range(max_tool_iterations):
+            for attempt in range(self.retries + 1):
+                try:
+                    async for chunk in self._stream_once_with_capabilities(
+                        request_messages, tools, think
+                    ):
+                        if chunk.kind == "thinking":
+                            accumulated_thinking += chunk.text
+                            yield chunk
+                        elif chunk.kind == "content":
+                            accumulated_content += chunk.text
+                            yield chunk
+                        elif chunk.kind == "tool_call":
+                            accumulated_tool_calls.append(
+                                {"name": chunk.tool_name, "args": chunk.tool_args}
+                            )
+                            yield chunk
+                    break
+                except asyncio.CancelledError:
+                    LOGGER.info(
+                        "chat.request.cancelled",
+                        extra={"event": "chat.request.cancelled"},
+                    )
+                    raise
+                except OllamaToolError:
+                    raise
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 - external API can fail in many ways.
+                    mapped_exc = self._map_exception(exc)
+                    LOGGER.warning(
+                        "chat.request.retry",
+                        extra={
+                            "event": "chat.request.retry",
+                            "attempt": attempt + 1,
+                            "error_type": mapped_exc.__class__.__name__,
+                        },
+                    )
+                    if attempt >= self.retries:
+                        raise mapped_exc from exc
+                    await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+
+            # If no tool calls, the agent loop is complete.
+            if not accumulated_tool_calls:
                 break
-            except asyncio.CancelledError:
-                LOGGER.info("chat.request.cancelled", extra={"event": "chat.request.cancelled"})
-                raise
-            except Exception as exc:  # noqa: BLE001 - external API can fail in many ways.
-                mapped_exc = self._map_exception(exc)
-                LOGGER.warning(
-                    "chat.request.retry",
-                    extra={"event": "chat.request.retry", "attempt": attempt + 1, "error_type": mapped_exc.__class__.__name__},
-                )
-                if attempt >= self.retries:
-                    raise mapped_exc from exc
-                await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
 
-        final_response = "".join(assistant_parts).strip()
+            # Append the assistant turn (with tool calls) to the request context.
+            assistant_turn: dict[str, Any] = {
+                "role": "assistant",
+                "content": accumulated_content,
+            }
+            if accumulated_thinking:
+                assistant_turn["thinking"] = accumulated_thinking
+            if accumulated_tool_calls:
+                assistant_turn["tool_calls"] = [
+                    {
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["args"]},
+                    }
+                    for tc in accumulated_tool_calls
+                ]
+            request_messages.append(assistant_turn)
+
+            # Execute each tool call and append results.
+            for tc in accumulated_tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc["args"]
+                LOGGER.info(
+                    "chat.tool.call",
+                    extra={
+                        "event": "chat.tool.call",
+                        "tool": tool_name,
+                        "iteration": iteration + 1,
+                    },
+                )
+                try:
+                    result = tool_registry.execute(tool_name, tool_args)  # type: ignore[union-attr]
+                except OllamaToolError as exc:
+                    result = f"[Tool error: {exc}]"
+                    LOGGER.warning(
+                        "chat.tool.error",
+                        extra={
+                            "event": "chat.tool.error",
+                            "tool": tool_name,
+                            "error": str(exc),
+                        },
+                    )
+                yield ChatChunk(
+                    kind="tool_result",
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    tool_result=result,
+                )
+                request_messages.append(
+                    {"role": "tool", "tool_name": tool_name, "content": result}
+                )
+
+            # Reset for next iteration, preserving only accumulated_content for history.
+            accumulated_thinking = ""
+            accumulated_content = ""
+            accumulated_tool_calls = []
+
+        # Persist the final assistant response (text only) to history.
+        final_response = accumulated_content.strip()
         self.message_store.append("assistant", final_response)

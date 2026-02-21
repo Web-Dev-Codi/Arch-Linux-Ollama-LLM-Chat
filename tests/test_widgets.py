@@ -121,8 +121,15 @@ class InputBoxTests(unittest.TestCase):
         assert InputBox is not None
         box = InputBox()
         buttons = [w for w in box.compose() if isinstance(w, Button)]
-        self.assertEqual(len(buttons), 1)
-        self.assertEqual(buttons[0].id, "send_button")
+        send_buttons = [b for b in buttons if b.id == "send_button"]
+        self.assertEqual(len(send_buttons), 1)
+
+    def test_attach_button_present(self) -> None:
+        assert InputBox is not None
+        box = InputBox()
+        buttons = [w for w in box.compose() if isinstance(w, Button)]
+        attach_buttons = [b for b in buttons if b.id == "attach_button"]
+        self.assertEqual(len(attach_buttons), 1)
 
 
 @unittest.skipIf(StatusBar is None, "textual is not installed")

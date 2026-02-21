@@ -20,14 +20,14 @@ class RetryClient:
         self.calls = 0
 
     async def chat(
-        self, model: str, messages: list[dict[str, str]], stream: bool
+        self, model: str, messages: list[dict[str, str]], stream: bool, **kwargs
     ) -> AsyncGenerator[dict[str, dict[str, str]], None]:
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("temporary failure")
 
         async def stream_response() -> AsyncGenerator[dict[str, dict[str, str]], None]:
-            yield {"message": {"content": "ok"}}
+            yield {"message": {"content": "ok", "thinking": None, "tool_calls": None}}
 
         return stream_response()
 
@@ -45,12 +45,15 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
             client=RetryClient(),
         )
 
+        from ollama_chat.chat import ChatChunk
+
         with self.assertLogs("ollama_chat.chat", level="WARNING") as logs:
-            chunks: list[str] = []
+            chunks: list[ChatChunk] = []
             async for chunk in chat.send_message("hello"):
                 chunks.append(chunk)
 
-        self.assertEqual(chunks, ["ok"])
+        content_texts = [c.text for c in chunks if c.kind == "content"]
+        self.assertEqual(content_texts, ["ok"])
         self.assertTrue(any("chat.request.retry" in line for line in logs.output))
 
     async def test_json_formatter_includes_structured_fields(self) -> None:

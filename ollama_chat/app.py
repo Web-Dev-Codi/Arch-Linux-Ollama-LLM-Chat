@@ -7,6 +7,7 @@ from datetime import datetime
 import inspect
 import logging
 import os
+import re
 import shutil
 import subprocess
 from typing import Any
@@ -24,16 +25,21 @@ from .exceptions import (
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaStreamingError,
+    OllamaToolError,
 )
 from .logging_utils import configure_logging
 from .persistence import ConversationPersistence
 from .state import ConversationState, StateManager
+from .tools import ToolRegistry, build_default_registry
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
 from .widgets.message import MessageBubble
 from .widgets.status_bar import StatusBar
 
 LOGGER = logging.getLogger(__name__)
+
+# Pattern matching /image <path> prefix anywhere in the input text.
+_IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
 
 
 class ModelPickerScreen(ModalScreen[str | None]):
@@ -101,11 +107,65 @@ class ModelPickerScreen(ModalScreen[str | None]):
         if option_index is None:
             option_index = getattr(event, "index", -1)
         try:
-            selected_index = int(option_index)
+            selected_index = int(option_index or -1)
         except (TypeError, ValueError):
             selected_index = -1
         if 0 <= selected_index < len(self.models):
             self.dismiss(self.models[selected_index])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ImageAttachScreen(ModalScreen[str | None]):
+    """Modal dialog for entering an image file path to attach."""
+
+    CSS = """
+    ImageAttachScreen {
+        align: center middle;
+    }
+
+    #image-attach-dialog {
+        width: 60;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+
+    #image-attach-title {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    #image-attach-input {
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #image-attach-help {
+        padding-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Container(id="image-attach-dialog"):
+            yield Static("Attach image", id="image-attach-title")
+            yield Input(
+                placeholder="Enter absolute or relative image path...",
+                id="image-attach-input",
+            )
+            yield Static("Enter to confirm  |  Esc to cancel", id="image-attach-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#image-attach-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "image-attach-input":
+            path = event.value.strip()
+            self.dismiss(path if path else None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -151,6 +211,11 @@ class OllamaChatApp(App[None]):
 
     #message_input {
         width: 1fr;
+    }
+
+    #attach_button {
+        margin-left: 1;
+        min-width: 10;
     }
 
     #send_button {
@@ -251,6 +316,29 @@ class OllamaChatApp(App[None]):
         self._search_position = -1
         self._startup_model_task: asyncio.Task[None] | None = None
         self._response_indicator_task: asyncio.Task[None] | None = None
+        self._pending_images: list[str] = []
+
+        # Capabilities configuration.
+        cap_cfg = self.config.get("capabilities", {})
+        self._cap_think: bool = bool(cap_cfg.get("think", True))
+        self._cap_show_thinking: bool = bool(cap_cfg.get("show_thinking", True))
+        self._cap_tools_enabled: bool = bool(cap_cfg.get("tools_enabled", True))
+        self._cap_web_search_enabled: bool = bool(
+            cap_cfg.get("web_search_enabled", False)
+        )
+        self._cap_web_search_api_key: str = str(cap_cfg.get("web_search_api_key", ""))
+        self._cap_vision_enabled: bool = bool(cap_cfg.get("vision_enabled", True))
+        self._cap_max_tool_iterations: int = int(cap_cfg.get("max_tool_iterations", 10))
+
+        # Build the tool registry based on capabilities.
+        if self._cap_tools_enabled:
+            self._tool_registry: ToolRegistry | None = build_default_registry(
+                web_search_enabled=self._cap_web_search_enabled,
+                web_search_api_key=self._cap_web_search_api_key,
+            )
+        else:
+            self._tool_registry = None
+
         persistence_cfg = self.config["persistence"]
         self.persistence = ConversationPersistence(
             enabled=bool(persistence_cfg["enabled"]),
@@ -399,8 +487,10 @@ class OllamaChatApp(App[None]):
 
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
+        attach_button = self.query_one("#attach_button", Button)
         input_widget.disabled = True
         send_button.disabled = True
+        attach_button.disabled = not self._cap_vision_enabled
         self._update_status_bar()
 
         self._startup_model_task = asyncio.create_task(self._prepare_startup_model())
@@ -605,7 +695,10 @@ class OllamaChatApp(App[None]):
     ) -> MessageBubble:
         conversation = self.query_one(ConversationView)
         bubble = await conversation.add_message(
-            content=content, role=role, timestamp=timestamp
+            content=content,
+            role=role,
+            timestamp=timestamp,
+            show_thinking=self._cap_show_thinking,
         )
         self._style_bubble(bubble, role)
         return bubble
@@ -620,6 +713,25 @@ class OllamaChatApp(App[None]):
         """Handle send button clicks."""
         if event.button.id == "send_button":
             await self.send_user_message()
+
+    async def on_input_box_attach_requested(
+        self, _message: InputBox.AttachRequested
+    ) -> None:
+        """Open image attach dialog when attach button is clicked."""
+        if not self._cap_vision_enabled:
+            self.sub_title = "Vision is disabled in capabilities config."
+            return
+        self.push_screen(ImageAttachScreen(), callback=self._on_image_attach_dismissed)
+
+    def _on_image_attach_dismissed(self, path: str | None) -> None:
+        if not path:
+            return
+        expanded = os.path.expanduser(path)
+        if not os.path.isfile(expanded):
+            self.sub_title = f"Image not found: {expanded}"
+            return
+        self._pending_images.append(expanded)
+        self.sub_title = f"Image attached: {os.path.basename(expanded)} ({len(self._pending_images)} total)"
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submit events."""
@@ -668,38 +780,100 @@ class OllamaChatApp(App[None]):
             pass
 
     async def _stream_assistant_response(
-        self, user_text: str, assistant_bubble: MessageBubble
+        self,
+        user_text: str,
+        assistant_bubble: MessageBubble,
+        images: list[str | bytes] | None = None,
     ) -> None:
         chunk_size = max(1, int(self.config["ui"]["stream_chunk_size"]))
-        display_buffer: list[str] = []
-        response_chunks: list[str] = []
+        content_buffer: list[str] = []
+        response_started = False
+        thinking_started = False
         self.sub_title = "Waiting for response..."
         self._response_indicator_task = asyncio.create_task(
             self._animate_response_placeholder(assistant_bubble)
         )
 
         try:
-            async for chunk in self.chat.send_message(user_text):
-                if not response_chunks:
-                    self.sub_title = "Streaming response..."
-                    await self._stop_response_indicator_task()
-                    assistant_bubble.set_content("")
-                response_chunks.append(chunk)
-                display_buffer.append(chunk)
-                if len(display_buffer) >= chunk_size:
-                    assistant_bubble.append_content("".join(display_buffer))
-                    display_buffer.clear()
+            async for chunk in self.chat.send_message(
+                user_text,
+                images=images or None,
+                tool_registry=self._tool_registry,
+                think=self._cap_think,
+                max_tool_iterations=self._cap_max_tool_iterations,
+            ):
+                if chunk.kind == "thinking":
+                    if not response_started:
+                        # Cancel placeholder on first thinking chunk too.
+                        await self._stop_response_indicator_task()
+                        assistant_bubble.set_content("")
+                        response_started = True
+                    if not thinking_started:
+                        thinking_started = True
+                        self.sub_title = "Thinking..."
+                    assistant_bubble.append_thinking(chunk.text)
                     self.query_one(ConversationView).scroll_end(animate=False)
 
-            if display_buffer:
-                assistant_bubble.append_content("".join(display_buffer))
+                elif chunk.kind == "content":
+                    if not response_started:
+                        await self._stop_response_indicator_task()
+                        assistant_bubble.set_content("")
+                        response_started = True
+                    if thinking_started:
+                        # Transition from thinking to content.
+                        assistant_bubble.finalize_thinking()
+                        thinking_started = False
+                        self.sub_title = "Streaming response..."
+                    content_buffer.append(chunk.text)
+                    if len(content_buffer) >= chunk_size:
+                        assistant_bubble.append_content("".join(content_buffer))
+                        content_buffer.clear()
+                        self.query_one(ConversationView).scroll_end(animate=False)
+
+                elif chunk.kind == "tool_call":
+                    if not response_started:
+                        await self._stop_response_indicator_task()
+                        assistant_bubble.set_content("")
+                        response_started = True
+                    # Flush any buffered content first.
+                    if content_buffer:
+                        assistant_bubble.append_content("".join(content_buffer))
+                        content_buffer.clear()
+                    assistant_bubble.append_tool_call(chunk.tool_name, chunk.tool_args)
+                    self.sub_title = f"Calling tool: {chunk.tool_name}..."
+                    self.query_one(ConversationView).scroll_end(animate=False)
+
+                elif chunk.kind == "tool_result":
+                    assistant_bubble.append_tool_result(
+                        chunk.tool_name, chunk.tool_result
+                    )
+                    self.sub_title = "Processing tool result..."
+                    self.query_one(ConversationView).scroll_end(animate=False)
+
+            # Flush remaining content buffer.
+            if content_buffer:
+                assistant_bubble.append_content("".join(content_buffer))
                 self.query_one(ConversationView).scroll_end(animate=False)
 
-            if not response_chunks:
+            if not response_started:
                 assistant_bubble.set_content("(No response from model.)")
             self._update_status_bar()
         finally:
             await self._stop_response_indicator_task()
+
+    @staticmethod
+    def _parse_image_prefixes(text: str) -> tuple[str, list[str]]:
+        """Extract /image <path> directives from input text.
+
+        Returns (cleaned_text, [image_paths]).
+        """
+        paths: list[str] = []
+        matches = _IMAGE_PREFIX_RE.findall(text)
+        for path in matches:
+            expanded = os.path.expanduser(path)
+            paths.append(expanded)
+        cleaned = _IMAGE_PREFIX_RE.sub("", text).strip()
+        return cleaned, paths
 
     async def send_user_message(self) -> None:
         """Collect input text and stream the assistant response into the UI."""
@@ -709,10 +883,32 @@ class OllamaChatApp(App[None]):
 
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
-        user_text = input_widget.value.strip()
-        if not user_text:
+        raw_text = input_widget.value.strip()
+
+        # Parse /image <path> prefixes from text (vision capability).
+        inline_images: list[str] = []
+        user_text = raw_text
+        if self._cap_vision_enabled:
+            user_text, inline_images = self._parse_image_prefixes(raw_text)
+
+        # Combine inline images and images attached via the attach button.
+        all_images: list[str] = inline_images + self._pending_images
+
+        if not user_text and not all_images:
             self.sub_title = "Cannot send an empty message."
             return
+
+        # Validate image paths before sending.
+        valid_images: list[str | bytes] = []
+        for img_path in all_images:
+            if os.path.isfile(img_path):
+                valid_images.append(img_path)
+            else:
+                LOGGER.warning(
+                    "app.vision.missing_image",
+                    extra={"event": "app.vision.missing_image", "path": img_path},
+                )
+                self.sub_title = f"Image not found, skipping: {img_path}"
 
         assistant_bubble: MessageBubble | None = None
         transitioned = await self.state.transition_if(
@@ -731,10 +927,13 @@ class OllamaChatApp(App[None]):
         )
         input_widget.disabled = True
         send_button.disabled = True
+        # Clear pending images now that we've consumed them.
+        self._pending_images = []
         try:
+            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s)]"
             self.sub_title = "Sending message..."
             await self._add_message(
-                content=user_text, role="user", timestamp=self._timestamp()
+                content=display_text, role="user", timestamp=self._timestamp()
             )
             input_widget.value = ""
             assistant_bubble = await self._add_message(
@@ -742,7 +941,11 @@ class OllamaChatApp(App[None]):
             )
 
             self._active_stream_task = asyncio.create_task(
-                self._stream_assistant_response(user_text, assistant_bubble)
+                self._stream_assistant_response(
+                    user_text,
+                    assistant_bubble,
+                    images=valid_images if valid_images else None,
+                )
             )
             self._background_tasks.add(self._active_stream_task)
             try:
@@ -757,6 +960,16 @@ class OllamaChatApp(App[None]):
                 "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
             )
             return
+        except OllamaToolError as exc:
+            await self._transition_state(ConversationState.ERROR)
+            error_message = f"Tool error: {exc}"
+            if assistant_bubble is None:
+                assistant_bubble = await self._add_message(
+                    content=error_message, role="assistant", timestamp=self._timestamp()
+                )
+            else:
+                assistant_bubble.set_content(error_message)
+            self.sub_title = "Tool execution error"
         except OllamaConnectionError:
             await self._transition_state(ConversationState.ERROR)
             error_message = (
@@ -830,6 +1043,7 @@ class OllamaChatApp(App[None]):
                 self._active_stream_task = None
 
         self.chat.clear_history()
+        self._pending_images = []
         await self._clear_conversation_view()
         self._search_query = ""
         self._search_results = []
@@ -852,7 +1066,7 @@ class OllamaChatApp(App[None]):
                     await result
 
     async def _render_messages_from_history(
-        self, messages: list[dict[str, str]]
+        self, messages: list[dict[str, Any]]
     ) -> None:
         """Render persisted non-system messages into the conversation view."""
         for message in messages:

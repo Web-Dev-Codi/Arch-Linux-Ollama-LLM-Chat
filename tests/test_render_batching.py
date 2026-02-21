@@ -33,14 +33,30 @@ class _FakeBubble:
         self.content = content
         self.set_calls += 1
 
+    def append_thinking(self, chunk: str) -> None:  # noqa: ARG002
+        pass
+
+    def finalize_thinking(self) -> None:
+        pass
+
+    def append_tool_call(self, name: str, args: dict) -> None:  # noqa: ARG002
+        pass
+
+    def append_tool_result(self, name: str, result: str) -> None:  # noqa: ARG002
+        pass
+
 
 class _FakeChat:
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
 
-    async def send_message(self, user_message: str) -> AsyncGenerator[str, None]:
+    async def send_message(
+        self, user_message: str, **kwargs
+    ) -> AsyncGenerator:  # noqa: ARG002
+        from ollama_chat.chat import ChatChunk
+
         for chunk in self._chunks:
-            yield chunk
+            yield ChatChunk(kind="content", text=chunk)
 
 
 class _FakeApp:
@@ -50,6 +66,9 @@ class _FakeApp:
         self._conversation = _FakeConversation()
         self.sub_title = ""
         self._response_indicator_task = None
+        self._tool_registry = None
+        self._cap_think = False
+        self._cap_max_tool_iterations = 10
 
     def query_one(self, *_args, **_kwargs) -> _FakeConversation:
         return self._conversation
@@ -57,7 +76,9 @@ class _FakeApp:
     def _update_status_bar(self) -> None:
         return
 
-    async def _animate_response_placeholder(self, bubble: _FakeBubble) -> None:  # noqa: ARG002
+    async def _animate_response_placeholder(
+        self, bubble: _FakeBubble
+    ) -> None:  # noqa: ARG002
         """Stub: production version animates a placeholder until cancelled."""
         import asyncio
 

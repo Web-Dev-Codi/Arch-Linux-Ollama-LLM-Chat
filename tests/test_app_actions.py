@@ -70,7 +70,9 @@ class _FakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(
+        self, pull_if_missing: bool = True
+    ) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
@@ -102,7 +104,9 @@ class _FakePersistence:
         self.saved = False
         self.exported = False
 
-    def save_conversation(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def save_conversation(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.saved = True
         return "/tmp/conv.json"
 
@@ -116,7 +120,9 @@ class _FakePersistence:
             ],
         }
 
-    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def export_markdown(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/conv.md"
 
@@ -171,7 +177,9 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
                 return self.app._status
             return self.app._conversation
 
-        async def add_message(content: str, role: str, timestamp: str = "") -> _FakeBubble:  # noqa: ARG001
+        async def add_message(
+            content: str, role: str, timestamp: str = ""
+        ) -> _FakeBubble:  # noqa: ARG001
             bubble = _FakeBubble(content=content)
             self.app._conversation.children.append(bubble)
             return bubble

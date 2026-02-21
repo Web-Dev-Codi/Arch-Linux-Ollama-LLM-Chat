@@ -28,7 +28,9 @@ class _RuntimeFakePersistence:
         self.saved = False
         self.exported = False
 
-    def save_conversation(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def save_conversation(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.saved = True
         return "/tmp/runtime-save.json"
 
@@ -42,7 +44,9 @@ class _RuntimeFakePersistence:
             ],
         }
 
-    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def export_markdown(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/runtime-export.md"
 
@@ -57,7 +61,11 @@ class _RuntimeFakeChat:
     def estimated_context_tokens(self) -> int:
         return 10 + len(self.messages)
 
-    async def send_message(self, user_message: str) -> AsyncGenerator[str, None]:
+    async def send_message(
+        self, user_message: str, **kwargs
+    ) -> AsyncGenerator:  # noqa: ARG002
+        from ollama_chat.chat import ChatChunk
+
         self.messages.append({"role": "user", "content": user_message})
         if self.failure == "connection":
             raise OllamaConnectionError("cannot connect")
@@ -68,13 +76,15 @@ class _RuntimeFakeChat:
         if self.failure == "generic":
             raise OllamaChatError("generic")
         for chunk in ["hello", " world"]:
-            yield chunk
+            yield ChatChunk(kind="content", text=chunk)
         self.messages.append({"role": "assistant", "content": "hello world"})
 
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(
+        self, pull_if_missing: bool = True
+    ) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
