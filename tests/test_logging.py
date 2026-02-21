@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 import json
 import logging
+import tempfile
+from pathlib import Path
 import unittest
 
 from ollama_chat.chat import OllamaChat
-from ollama_chat.logging_utils import JsonFormatter
+from ollama_chat.logging_utils import JsonFormatter, configure_logging
 
 
 class RetryClient:
@@ -71,6 +73,108 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["from_state"], "IDLE")
         self.assertEqual(data["to_state"], "STREAMING")
         self.assertEqual(data["level"], "INFO")
+
+
+class ConfigureLoggingTests(unittest.TestCase):
+    """Validate configure_logging() handler setup behavior."""
+
+    def setUp(self) -> None:
+        # Preserve root logger state so tests do not pollute each other.
+        root = logging.getLogger()
+        self._original_level = root.level
+        self._original_handlers = list(root.handlers)
+
+    def tearDown(self) -> None:
+        root = logging.getLogger()
+        root.setLevel(self._original_level)
+        root.handlers.clear()
+        root.handlers.extend(self._original_handlers)
+
+    def test_configure_logging_adds_stderr_handler(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
+        root = logging.getLogger()
+        stream_handlers = [
+            h
+            for h in root.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        self.assertTrue(len(stream_handlers) >= 1)
+
+    def test_configure_logging_structured_uses_json_formatter(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": True, "log_to_file": False})
+        root = logging.getLogger()
+        formatters = [h.formatter for h in root.handlers]
+        self.assertTrue(any(isinstance(f, JsonFormatter) for f in formatters))
+
+    def test_configure_logging_plain_formatter_when_not_structured(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
+        root = logging.getLogger()
+        formatters = [h.formatter for h in root.handlers]
+        self.assertFalse(any(isinstance(f, JsonFormatter) for f in formatters))
+
+    def test_configure_logging_sets_root_level(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
+        root = logging.getLogger()
+        self.assertEqual(root.level, logging.DEBUG)
+
+    def test_configure_logging_noisy_loggers_set_to_warning(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
+        for name in ("httpx", "httpcore", "ollama"):
+            self.assertEqual(logging.getLogger(name).level, logging.WARNING)
+
+    def test_configure_logging_file_handler_created(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = str(Path(tmp) / "test.log")
+            configure_logging(
+                {
+                    "level": "DEBUG",
+                    "structured": False,
+                    "log_to_file": True,
+                    "log_file_path": log_path,
+                }
+            )
+            root = logging.getLogger()
+            file_handlers = [
+                h for h in root.handlers if isinstance(h, logging.FileHandler)
+            ]
+            self.assertTrue(len(file_handlers) >= 1)
+            self.assertTrue(Path(log_path).exists())
+
+    def test_configure_logging_stderr_handler_filters_to_ollama_chat(self) -> None:
+        configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
+        root = logging.getLogger()
+        stream_handlers = [
+            h
+            for h in root.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        self.assertTrue(len(stream_handlers) >= 1)
+        handler = stream_handlers[0]
+        # Filters may be stored as callables (plain functions) or Filter objects.
+        # logging.Handler.filter() applies all filters correctly regardless.
+        chat_record = logging.LogRecord(
+            name="ollama_chat.app",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="ok",
+            args=(),
+            exc_info=None,
+        )
+        other_record = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="noise",
+            args=(),
+            exc_info=None,
+        )
+        # handler.filter() returns truthy when all filters pass.
+        self.assertTrue(handler.filter(chat_record))
+        self.assertFalse(handler.filter(other_record))
 
 
 if __name__ == "__main__":

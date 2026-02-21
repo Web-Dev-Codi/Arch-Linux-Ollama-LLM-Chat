@@ -49,6 +49,7 @@ class _FakeApp:
         self.chat = _FakeChat(chunks)
         self._conversation = _FakeConversation()
         self.sub_title = ""
+        self._response_indicator_task = None
 
     def query_one(self, *_args, **_kwargs) -> _FakeConversation:
         return self._conversation
@@ -56,20 +57,45 @@ class _FakeApp:
     def _update_status_bar(self) -> None:
         return
 
+    async def _animate_response_placeholder(self, bubble: _FakeBubble) -> None:  # noqa: ARG002
+        """Stub: production version animates a placeholder until cancelled."""
+        import asyncio
+
+        await asyncio.sleep(9999)
+
+    async def _stop_response_indicator_task(self) -> None:
+        """Stub: cancel the indicator task if it is running."""
+        import asyncio
+
+        task = self._response_indicator_task
+        self._response_indicator_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 @unittest.skipIf(OllamaChatApp is None, "textual is not installed")
 class RenderBatchingTests(unittest.IsolatedAsyncioTestCase):
     """Validate that stream updates are batched and flushed."""
 
     async def test_chunk_updates_are_batched(self) -> None:
-        fake_app = _FakeApp(chunks=["a", "b", "c", "d", "e", "f", "g"], stream_chunk_size=3)
+        fake_app = _FakeApp(
+            chunks=["a", "b", "c", "d", "e", "f", "g"], stream_chunk_size=3
+        )
         bubble = _FakeBubble()
 
         await OllamaChatApp._stream_assistant_response(fake_app, "hello", bubble)  # type: ignore[arg-type]
 
         self.assertEqual(bubble.content, "abcdefg")
         self.assertEqual(bubble.append_calls, 3)
-        self.assertEqual(bubble.set_calls, 0)
+        # set_content("") is called once when the first chunk arrives to clear
+        # the animated placeholder before appending streamed content.
+        self.assertEqual(bubble.set_calls, 1)
         self.assertEqual(fake_app._conversation.scroll_calls, 3)
 
     async def test_empty_stream_sets_placeholder(self) -> None:

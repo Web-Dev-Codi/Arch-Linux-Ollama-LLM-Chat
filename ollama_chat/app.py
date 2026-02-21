@@ -83,7 +83,9 @@ class ModelPickerScreen(ModalScreen[str | None]):
         with Container(id="model-picker-dialog"):
             yield Static("Select model from config", id="model-picker-title")
             yield OptionList(*self.models, id="model-picker-options")
-            yield Static("Enter/click to select  |  Esc to cancel", id="model-picker-help")
+            yield Static(
+                "Enter/click to select  |  Esc to cancel", id="model-picker-help"
+            )
 
     def on_mount(self) -> None:
         options = self.query_one("#model-picker-options", OptionList)
@@ -260,7 +262,9 @@ class OllamaChatApp(App[None]):
         super().__init__()
 
     @classmethod
-    def _binding_specs_from_config(cls, config: dict[str, dict[str, Any]]) -> list[Binding]:
+    def _binding_specs_from_config(
+        cls, config: dict[str, dict[str, Any]]
+    ) -> list[Binding]:
         keybinds = config.get("keybinds", {})
         bindings: list[Binding] = []
         for key, action_name in cls.KEY_TO_ACTION.items():
@@ -270,7 +274,9 @@ class OllamaChatApp(App[None]):
                     Binding(
                         key=binding_key.strip(),
                         action=action_name,
-                        description=cls.DEFAULT_ACTION_DESCRIPTIONS.get(key, action_name),
+                        description=cls.DEFAULT_ACTION_DESCRIPTIONS.get(
+                            key, action_name
+                        ),
                         show=True,
                     )
                 )
@@ -377,7 +383,10 @@ class OllamaChatApp(App[None]):
         """Apply theme and register runtime keybindings."""
         self.title = self.window_title
         self._set_idle_sub_title(f"Model: {self.chat.model}")
-        LOGGER.info("app.state.transition", extra={"event": "app.state.transition", "to_state": "IDLE"})
+        LOGGER.info(
+            "app.state.transition",
+            extra={"event": "app.state.transition", "to_state": "IDLE"},
+        )
         self._apply_theme()
         for binding in self._binding_specs:
             self.bind(
@@ -398,7 +407,9 @@ class OllamaChatApp(App[None]):
         self._background_tasks.add(self._startup_model_task)
         self._startup_model_task.add_done_callback(self._background_tasks.discard)
 
-        self._connection_monitor_task = asyncio.create_task(self._connection_monitor_loop())
+        self._connection_monitor_task = asyncio.create_task(
+            self._connection_monitor_loop()
+        )
         self._background_tasks.add(self._connection_monitor_task)
 
     async def _prepare_startup_model(self) -> None:
@@ -499,7 +510,9 @@ class OllamaChatApp(App[None]):
         return bool(getattr(self, "theme", ""))
 
     def _update_status_bar(self) -> None:
-        message_count = sum(1 for message in self.chat.messages if message.get("role") != "system")
+        message_count = sum(
+            1 for message in self.chat.messages if message.get("role") != "system"
+        )
         status_widget = self.query_one("#status_bar", StatusBar)
         status_widget.set_status(
             connection_state=self._connection_state,
@@ -571,23 +584,35 @@ class OllamaChatApp(App[None]):
                     self._connection_state = new_state
                     LOGGER.info(
                         "app.connection.state",
-                        extra={"event": "app.connection.state", "connection_state": new_state},
+                        extra={
+                            "event": "app.connection.state",
+                            "connection_state": new_state,
+                        },
                     )
                     if await self.state.get_state() == ConversationState.IDLE:
                         self._set_idle_sub_title(f"Connection: {new_state}")
                 self._update_status_bar()
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            LOGGER.info("app.connection.monitor.stopped", extra={"event": "app.connection.monitor.stopped"})
+            LOGGER.info(
+                "app.connection.monitor.stopped",
+                extra={"event": "app.connection.monitor.stopped"},
+            )
             raise
 
-    async def _add_message(self, content: str, role: str, timestamp: str = "") -> MessageBubble:
+    async def _add_message(
+        self, content: str, role: str, timestamp: str = ""
+    ) -> MessageBubble:
         conversation = self.query_one(ConversationView)
-        bubble = await conversation.add_message(content=content, role=role, timestamp=timestamp)
+        bubble = await conversation.add_message(
+            content=content, role=role, timestamp=timestamp
+        )
         self._style_bubble(bubble, role)
         return bubble
 
-    async def on_status_bar_model_picker_requested(self, _message: StatusBar.ModelPickerRequested) -> None:
+    async def on_status_bar_model_picker_requested(
+        self, _message: StatusBar.ModelPickerRequested
+    ) -> None:
         """Open configured model picker from StatusBar model segment click."""
         await self._open_configured_model_picker()
 
@@ -617,11 +642,15 @@ class OllamaChatApp(App[None]):
             },
         )
 
-    async def _animate_response_placeholder(self, assistant_bubble: MessageBubble) -> None:
+    async def _animate_response_placeholder(
+        self, assistant_bubble: MessageBubble
+    ) -> None:
         frame_index = 0
         while True:
             assistant_bubble.set_content(
-                self.RESPONSE_PLACEHOLDER_FRAMES[frame_index % len(self.RESPONSE_PLACEHOLDER_FRAMES)]
+                self.RESPONSE_PLACEHOLDER_FRAMES[
+                    frame_index % len(self.RESPONSE_PLACEHOLDER_FRAMES)
+                ]
             )
             frame_index += 1
             await asyncio.sleep(0.35)
@@ -638,12 +667,16 @@ class OllamaChatApp(App[None]):
         except asyncio.CancelledError:
             pass
 
-    async def _stream_assistant_response(self, user_text: str, assistant_bubble: MessageBubble) -> None:
+    async def _stream_assistant_response(
+        self, user_text: str, assistant_bubble: MessageBubble
+    ) -> None:
         chunk_size = max(1, int(self.config["ui"]["stream_chunk_size"]))
         display_buffer: list[str] = []
         response_chunks: list[str] = []
         self.sub_title = "Waiting for response..."
-        self._response_indicator_task = asyncio.create_task(self._animate_response_placeholder(assistant_bubble))
+        self._response_indicator_task = asyncio.create_task(
+            self._animate_response_placeholder(assistant_bubble)
+        )
 
         try:
             async for chunk in self.chat.send_message(user_text):
@@ -682,23 +715,35 @@ class OllamaChatApp(App[None]):
             return
 
         assistant_bubble: MessageBubble | None = None
-        transitioned = await self.state.transition_if(ConversationState.IDLE, ConversationState.STREAMING)
+        transitioned = await self.state.transition_if(
+            ConversationState.IDLE, ConversationState.STREAMING
+        )
         if not transitioned:
             self.sub_title = "Busy. Wait for current request to finish."
             return
         LOGGER.info(
             "app.state.transition",
-            extra={"event": "app.state.transition", "from_state": "IDLE", "to_state": "STREAMING"},
+            extra={
+                "event": "app.state.transition",
+                "from_state": "IDLE",
+                "to_state": "STREAMING",
+            },
         )
         input_widget.disabled = True
         send_button.disabled = True
         try:
             self.sub_title = "Sending message..."
-            await self._add_message(content=user_text, role="user", timestamp=self._timestamp())
+            await self._add_message(
+                content=user_text, role="user", timestamp=self._timestamp()
+            )
             input_widget.value = ""
-            assistant_bubble = await self._add_message(content="", role="assistant", timestamp=self._timestamp())
+            assistant_bubble = await self._add_message(
+                content="", role="assistant", timestamp=self._timestamp()
+            )
 
-            self._active_stream_task = asyncio.create_task(self._stream_assistant_response(user_text, assistant_bubble))
+            self._active_stream_task = asyncio.create_task(
+                self._stream_assistant_response(user_text, assistant_bubble)
+            )
             self._background_tasks.add(self._active_stream_task)
             try:
                 await self._active_stream_task
@@ -708,13 +753,19 @@ class OllamaChatApp(App[None]):
             self._set_idle_sub_title("Ready")
         except asyncio.CancelledError:
             self.sub_title = "Request cancelled."
-            LOGGER.info("chat.request.cancelled", extra={"event": "chat.request.cancelled"})
+            LOGGER.info(
+                "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
+            )
             return
         except OllamaConnectionError:
             await self._transition_state(ConversationState.ERROR)
-            error_message = "Connection error. Verify Ollama service and host configuration."
+            error_message = (
+                "Connection error. Verify Ollama service and host configuration."
+            )
             if assistant_bubble is None:
-                assistant_bubble = await self._add_message(content=error_message, role="assistant", timestamp=self._timestamp())
+                assistant_bubble = await self._add_message(
+                    content=error_message, role="assistant", timestamp=self._timestamp()
+                )
             else:
                 assistant_bubble.set_content(error_message)
             self.sub_title = "Connection error"
@@ -722,7 +773,9 @@ class OllamaChatApp(App[None]):
             await self._transition_state(ConversationState.ERROR)
             error_message = "Model not found. Verify the configured ollama.model value."
             if assistant_bubble is None:
-                assistant_bubble = await self._add_message(content=error_message, role="assistant", timestamp=self._timestamp())
+                assistant_bubble = await self._add_message(
+                    content=error_message, role="assistant", timestamp=self._timestamp()
+                )
             else:
                 assistant_bubble.set_content(error_message)
             self.sub_title = "Model not found"
@@ -730,7 +783,9 @@ class OllamaChatApp(App[None]):
             await self._transition_state(ConversationState.ERROR)
             error_message = "Streaming error. Please retry your message."
             if assistant_bubble is None:
-                assistant_bubble = await self._add_message(content=error_message, role="assistant", timestamp=self._timestamp())
+                assistant_bubble = await self._add_message(
+                    content=error_message, role="assistant", timestamp=self._timestamp()
+                )
             else:
                 assistant_bubble.set_content(error_message)
             self.sub_title = "Streaming error"
@@ -738,7 +793,9 @@ class OllamaChatApp(App[None]):
             await self._transition_state(ConversationState.ERROR)
             error_message = "Chat error. Please review settings and try again."
             if assistant_bubble is None:
-                assistant_bubble = await self._add_message(content=error_message, role="assistant", timestamp=self._timestamp())
+                assistant_bubble = await self._add_message(
+                    content=error_message, role="assistant", timestamp=self._timestamp()
+                )
             else:
                 assistant_bubble.set_content(error_message)
             self.sub_title = "Chat error"
@@ -752,15 +809,22 @@ class OllamaChatApp(App[None]):
 
     async def action_new_conversation(self) -> None:
         """Clear UI and in-memory conversation history."""
-        if await self.state.get_state() == ConversationState.STREAMING and self._active_stream_task is not None:
+        if (
+            await self.state.get_state() == ConversationState.STREAMING
+            and self._active_stream_task is not None
+        ):
             task = self._active_stream_task
             await self._transition_state(ConversationState.CANCELLING)
-            LOGGER.info("chat.request.cancelling", extra={"event": "chat.request.cancelling"})
+            LOGGER.info(
+                "chat.request.cancelling", extra={"event": "chat.request.cancelling"}
+            )
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
-                LOGGER.info("chat.request.cancelled", extra={"event": "chat.request.cancelled"})
+                LOGGER.info(
+                    "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
+                )
             finally:
                 self._background_tasks.discard(task)
                 self._active_stream_task = None
@@ -787,20 +851,45 @@ class OllamaChatApp(App[None]):
                 if inspect.isawaitable(result):
                     await result
 
-    async def _render_messages_from_history(self, messages: list[dict[str, str]]) -> None:
+    async def _render_messages_from_history(
+        self, messages: list[dict[str, str]]
+    ) -> None:
         """Render persisted non-system messages into the conversation view."""
         for message in messages:
             role = str(message.get("role", "")).strip().lower()
             if role == "system":
                 continue
             content = str(message.get("content", ""))
-            await self._add_message(content=content, role=role, timestamp=self._timestamp())
+            await self._add_message(
+                content=content, role=role, timestamp=self._timestamp()
+            )
+
+    def _auto_save_on_exit(self) -> None:
+        """Persist conversation on exit when auto_save is enabled."""
+        persistence_cfg = self.config.get("persistence", {})
+        if not bool(persistence_cfg.get("enabled", False)):
+            return
+        if not bool(persistence_cfg.get("auto_save", True)):
+            return
+        non_system = [m for m in self.chat.messages if m.get("role") != "system"]
+        if not non_system:
+            return
+        try:
+            self.persistence.save_conversation(self.chat.messages, self.chat.model)
+            LOGGER.info("app.auto_save", extra={"event": "app.auto_save"})
+        except Exception:  # noqa: BLE001
+            LOGGER.warning(
+                "app.auto_save.failed", extra={"event": "app.auto_save.failed"}
+            )
 
     async def on_unmount(self) -> None:
         """Cancel and await all background tasks during shutdown."""
+        self._auto_save_on_exit()
         await self._transition_state(ConversationState.CANCELLING)
         await self._stop_response_indicator_task()
-        tasks: set[asyncio.Task[Any]] = {task for task in self._background_tasks if not task.done()}
+        tasks: set[asyncio.Task[Any]] = {
+            task for task in self._background_tasks if not task.done()
+        }
         if self._active_stream_task is not None and not self._active_stream_task.done():
             tasks.add(self._active_stream_task)
         for task in tasks:
@@ -842,7 +931,9 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Persistence is disabled in configuration."
             return
         try:
-            path = self.persistence.save_conversation(self.chat.messages, self.chat.model)
+            path = self.persistence.save_conversation(
+                self.chat.messages, self.chat.model
+            )
             self.sub_title = f"Conversation saved: {path}"
         except Exception:
             self.sub_title = "Failed to save conversation."
@@ -901,7 +992,9 @@ class OllamaChatApp(App[None]):
             non_system_index += 1
             if index == message_index:
                 break
-        bubbles = [child for child in conversation.children if isinstance(child, MessageBubble)]
+        bubbles = [
+            child for child in conversation.children if isinstance(child, MessageBubble)
+        ]
         if 0 <= non_system_index < len(bubbles):
             target = bubbles[non_system_index]
             if hasattr(target, "scroll_visible"):
@@ -914,7 +1007,9 @@ class OllamaChatApp(App[None]):
         query = input_widget.value.strip().lower()
 
         if not query and self._search_results:
-            self._search_position = (self._search_position + 1) % len(self._search_results)
+            self._search_position = (self._search_position + 1) % len(
+                self._search_results
+            )
             current = self._search_results[self._search_position]
             self._jump_to_search_result(current)
             self.sub_title = f"Search {self._search_position + 1}/{len(self._search_results)}: {self._search_query}"
@@ -927,14 +1022,17 @@ class OllamaChatApp(App[None]):
         self._search_results = [
             index
             for index, message in enumerate(self.chat.messages)
-            if message.get("role") != "system" and query in str(message.get("content", "")).lower()
+            if message.get("role") != "system"
+            and query in str(message.get("content", "")).lower()
         ]
         self._search_position = 0
         if not self._search_results:
             self.sub_title = f"No matches for '{query}'."
             return
         self._jump_to_search_result(self._search_results[self._search_position])
-        self.sub_title = f"Search {self._search_position + 1}/{len(self._search_results)}: {query}"
+        self.sub_title = (
+            f"Search {self._search_position + 1}/{len(self._search_results)}: {query}"
+        )
 
     async def action_copy_last_message(self) -> None:
         """Copy the latest assistant reply to clipboard when available."""

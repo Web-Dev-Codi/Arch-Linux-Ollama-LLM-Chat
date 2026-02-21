@@ -10,7 +10,14 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .exceptions import ConfigValidationError
 
@@ -176,7 +183,11 @@ class SecurityConfig(BaseModel):
     def _validate_allowed_hosts(cls, value: Any) -> list[str]:
         if not isinstance(value, list):
             raise ValueError("allowed_hosts must be a list.")
-        normalized_hosts = [item.strip().lower() for item in value if isinstance(item, str) and item.strip()]
+        normalized_hosts = [
+            item.strip().lower()
+            for item in value
+            if isinstance(item, str) and item.strip()
+        ]
         if not normalized_hosts:
             raise ValueError("allowed_hosts must contain at least one host.")
         return normalized_hosts
@@ -215,6 +226,7 @@ class PersistenceConfig(BaseModel):
     """Conversation persistence settings (Tier 2 feature flags included)."""
 
     enabled: bool = False
+    auto_save: bool = True
     directory: str = "~/.local/state/ollama-chat/conversations"
     metadata_path: str = "~/.local/state/ollama-chat/conversations/index.json"
 
@@ -251,14 +263,26 @@ class Config(BaseModel):
             raise ValueError("ollama.host must use http or https scheme.")
         if not hostname:
             raise ValueError("ollama.host must include a hostname.")
-        if not self.security.allow_remote_hosts and hostname not in set(self.security.allowed_hosts):
+        if not self.security.allow_remote_hosts and hostname not in set(
+            self.security.allowed_hosts
+        ):
             raise ValueError(
                 "ollama.host is not in security.allowed_hosts while allow_remote_hosts is false."
             )
         return self
 
 
-DEFAULT_CONFIG: dict[str, dict[str, Any]] = Config().model_dump(by_alias=True)
+def _build_default_config() -> dict[str, dict[str, Any]]:
+    """Build default config with an empty models list for clean merging."""
+    data = Config().model_dump(by_alias=True)
+    # Keep models empty in the base default so that user-specified `model`
+    # values are not contaminated by the normalised default model list when
+    # deep-merging a partial TOML that only sets `model` without `models`.
+    data["ollama"]["models"] = []
+    return data
+
+
+DEFAULT_CONFIG: dict[str, dict[str, Any]] = _build_default_config()
 
 
 def ensure_config_dir(config_dir: Path | None = None) -> Path:
@@ -327,7 +351,11 @@ def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
             LOGGER.warning("Failed to parse config at %s: %s", target_path, exc)
             raw_data = {}
 
-    merged = _deep_merge(DEFAULT_CONFIG, raw_data) if isinstance(raw_data, dict) else _safe_default_config()
+    merged = (
+        _deep_merge(DEFAULT_CONFIG, raw_data)
+        if isinstance(raw_data, dict)
+        else _safe_default_config()
+    )
     validated = _validate_config(merged)
     _enforce_private_permissions(target_path)
     return validated

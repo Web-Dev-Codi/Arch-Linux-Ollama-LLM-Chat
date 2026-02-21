@@ -147,7 +147,7 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(app.chat.messages), 1)
 
             status_connection = app.query_one("#status_connection")
-            self.assertIn("🟢", str(status_connection.renderable))
+            self.assertIn("🟢", str(status_connection.render()))
 
     async def test_send_message_connection_error_path(self) -> None:
         app = self._build_app(failure="connection")
@@ -189,6 +189,73 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await app._activate_selected_model("qwen2.5")
             self.assertEqual(app.chat.model, current_model)
             self.assertEqual(app.sub_title, "Model switch is available only when idle.")
+
+    async def test_on_unmount_cancels_background_tasks(self) -> None:
+        """on_unmount() must cancel all background tasks without hanging."""
+        import asyncio
+
+        app = self._build_app()
+        cancelled_flags: list[bool] = []
+
+        async def _long_running() -> None:
+            try:
+                await asyncio.sleep(9999)
+            except asyncio.CancelledError:
+                cancelled_flags.append(True)
+                raise
+
+        async with app.run_test():
+            task = asyncio.create_task(_long_running())
+            app._background_tasks.add(task)
+
+        # After the context manager exits, on_unmount has been called.
+        self.assertTrue(task.done(), "Long-running task should be done after unmount.")
+        self.assertTrue(
+            cancelled_flags, "Long-running task should have been cancelled."
+        )
+
+    async def test_auto_save_on_exit_called_when_enabled(self) -> None:
+        """_auto_save_on_exit() triggers persistence.save_conversation when enabled."""
+        app = self._build_app()
+        # Inject non-empty chat history so auto-save has something to save.
+        app.chat.messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        app.config["persistence"]["enabled"] = True
+        app.config["persistence"]["auto_save"] = True
+
+        app._auto_save_on_exit()
+
+        self.assertTrue(app.persistence.saved)
+
+    async def test_auto_save_skipped_when_disabled(self) -> None:
+        """_auto_save_on_exit() does nothing when persistence is disabled."""
+        app = self._build_app()
+        app.chat.messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+        ]
+        app.config["persistence"]["enabled"] = False
+
+        app._auto_save_on_exit()
+
+        self.assertFalse(app.persistence.saved)
+
+    async def test_auto_save_skipped_when_auto_save_false(self) -> None:
+        """_auto_save_on_exit() does nothing when auto_save flag is False."""
+        app = self._build_app()
+        app.chat.messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+        ]
+        app.config["persistence"]["enabled"] = True
+        app.config["persistence"]["auto_save"] = False
+
+        app._auto_save_on_exit()
+
+        self.assertFalse(app.persistence.saved)
 
 
 if __name__ == "__main__":
