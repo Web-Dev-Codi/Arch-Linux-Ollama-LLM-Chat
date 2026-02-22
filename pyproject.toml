@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ollama-chat-tui"
 version = "0.1.0"
-description = "ChatGPT-style TUI for Ollama local LLMs"
+description = "Chat TUI for local Ollama models"
 authors = [{ name = "Web-Dev-Codi", email = "webdevcodi@gmail.com" }]
 license = { text = "MIT" }
 readme = "README.md"
@@ -33,6 +33,8 @@ ollama-chat = "ollama_chat.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat"
+Repository = "https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat"
+Issues = "https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat/issues"
 
 [tool.setuptools.packages.find]
 include = ["ollama_chat*"]
