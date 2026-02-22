@@ -11,11 +11,13 @@ import sys
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
+from textual.events import Key, Paste
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
@@ -39,8 +41,9 @@ from .widgets.status_bar import StatusBar
 
 LOGGER = logging.getLogger(__name__)
 
-# Pattern matching /image <path> prefix anywhere in the input text.
+# Pattern matching /image <path> and /file <path> prefixes anywhere in the input text.
 _IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
+_FILE_PREFIX_RE = re.compile(r"(?:^|\s)/file\s+(\S+)")
 
 
 class ModelPickerScreen(ModalScreen[str | None]):
@@ -209,6 +212,11 @@ class OllamaChatApp(App[None]):
         min-width: 10;
     }
 
+    #file_button {
+        margin-left: 1;
+        min-width: 10;
+    }
+
     #send_button {
         margin-left: 1;
         min-width: 10;
@@ -219,6 +227,16 @@ class OllamaChatApp(App[None]):
         padding: 0 1;
         border-top: solid $panel;
         background: $surface;
+    }
+
+    #slash_menu {
+        max-height: 8;
+        width: 60;
+        margin-top: 1;
+    }
+
+    #slash_menu.hidden {
+        display: none;
     }
 
     MessageBubble {
@@ -316,6 +334,17 @@ class OllamaChatApp(App[None]):
         self._startup_model_task: asyncio.Task[None] | None = None
         self._response_indicator_task: asyncio.Task[None] | None = None
         self._pending_images: list[str] = []
+        self._pending_files: list[str] = []
+        self._last_prompt: str = ""
+
+        self._slash_commands: list[tuple[str, str]] = [
+            ("/image <path>", "Attach image from filesystem"),
+            ("/file <path>", "Attach file as context"),
+            ("/new", "Start a new conversation"),
+            ("/clear", "Clear the input"),
+            ("/help", "Show help"),
+            ("/model <name>", "Switch active model"),
+        ]
 
         # Capabilities configuration.
         cap_cfg = self.config.get("capabilities", {})
@@ -354,9 +383,28 @@ class OllamaChatApp(App[None]):
             directory=str(persistence_cfg["directory"]),
             metadata_path=str(persistence_cfg["metadata_path"]),
         )
+        self._last_prompt_path = self.persistence.directory / "last_prompt.txt"
+        self._load_last_prompt()
         self._binding_specs = self._binding_specs_from_config(self.config)
         self._apply_terminal_window_identity()
         super().__init__()
+
+    def _load_last_prompt(self) -> None:
+        try:
+            if self._last_prompt_path.exists():
+                self._last_prompt = self._last_prompt_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            self._last_prompt = ""
+
+    def _save_last_prompt(self, prompt: str) -> None:
+        try:
+            self._last_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            self._last_prompt_path.write_text(prompt, encoding="utf-8")
+        except Exception:
+            LOGGER.warning(
+                "app.last_prompt.save_failed",
+                extra={"event": "app.last_prompt.save_failed"},
+            )
 
     @classmethod
     def _binding_specs_from_config(
@@ -497,9 +545,11 @@ class OllamaChatApp(App[None]):
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
         attach_button = self.query_one("#attach_button", Button)
+        file_button = self.query_one("#file_button", Button)
         input_widget.disabled = True
         send_button.disabled = True
         attach_button.disabled = not self._cap_vision_enabled
+        file_button.disabled = False
         self._update_status_bar()
 
         self._startup_model_task = asyncio.create_task(self._prepare_startup_model())
@@ -515,11 +565,13 @@ class OllamaChatApp(App[None]):
         """Warm up model in background so UI stays responsive on launch."""
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
+        file_button = self.query_one("#file_button", Button)
         try:
             await self._ensure_startup_model_ready()
         finally:
             input_widget.disabled = False
             send_button.disabled = False
+            file_button.disabled = False
             input_widget.focus()
             self._update_status_bar()
 
@@ -732,6 +784,13 @@ class OllamaChatApp(App[None]):
             return
         self.push_screen(ImageAttachScreen(), callback=self._on_image_attach_dismissed)
 
+    async def on_input_box_file_attach_requested(
+        self, _message: InputBox.FileAttachRequested
+    ) -> None:
+        """Open file picker dialog when file attach button is clicked."""
+        # Reuse image attach dialog semantics for now (path entry).
+        self.push_screen(ImageAttachScreen(), callback=self._on_file_attach_dismissed)
+
     def _on_image_attach_dismissed(self, path: str | None) -> None:
         if not path:
             return
@@ -742,10 +801,121 @@ class OllamaChatApp(App[None]):
         self._pending_images.append(expanded)
         self.sub_title = f"Image attached: {os.path.basename(expanded)} ({len(self._pending_images)} total)"
 
+    def _on_file_attach_dismissed(self, path: str | None) -> None:
+        if not path:
+            return
+        expanded = os.path.expanduser(path)
+        if not os.path.isfile(expanded):
+            self.sub_title = f"File not found: {expanded}"
+            return
+        self._pending_files.append(expanded)
+        self.sub_title = f"File attached: {os.path.basename(expanded)} ({len(self._pending_files)} total)"
+
+    @staticmethod
+    def _is_image_path(path: str) -> bool:
+        ext = os.path.splitext(path)[1].lower()
+        return ext in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+
+    @staticmethod
+    def _extract_paths_from_paste(text: str) -> list[str]:
+        """Extract file paths from pasted text (common drag/drop behavior)."""
+        candidates: list[str] = []
+        for token in text.strip().split():
+            cleaned = token.strip().strip("'\"")
+            if cleaned.startswith("file://"):
+                cleaned = cleaned[len("file://") :]
+            if cleaned:
+                candidates.append(cleaned)
+        return candidates
+
+    def on_paste(self, event: Paste) -> None:
+        """Handle drag/drop style paste events to attach files/images."""
+        if not event.text:
+            return
+        paths = self._extract_paths_from_paste(event.text)
+        if not paths:
+            return
+        added_images = 0
+        added_files = 0
+        for path in paths:
+            expanded = os.path.expanduser(path)
+            if not os.path.isfile(expanded):
+                continue
+            if self._is_image_path(expanded) and self._cap_vision_enabled:
+                self._pending_images.append(expanded)
+                added_images += 1
+            else:
+                self._pending_files.append(expanded)
+                added_files += 1
+        if added_images or added_files:
+            self.sub_title = (
+                f"Attached {added_images} image(s), {added_files} file(s) via drop"
+            )
+            event.stop()
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submit events."""
         if event.input.id == "message_input":
             await self.send_user_message()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Toggle slash menu visibility based on input prefix."""
+        if event.input.id != "message_input":
+            return
+        value = event.value
+        if value.startswith("/"):
+            self._show_slash_menu(prefix=value)
+        else:
+            self._hide_slash_menu()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "slash_menu":
+            return
+        option_text = str(event.option.prompt)
+        command = option_text.split(" ", 1)[0]
+        input_widget = self.query_one("#message_input", Input)
+        input_widget.value = f"{command} "
+        input_widget.cursor_position = len(input_widget.value)
+        self._hide_slash_menu()
+        input_widget.focus()
+        event.stop()
+
+    def on_key(self, event: Key) -> None:
+        """Handle Up-arrow recall and slash quick-open."""
+        if event.key == "up":
+            try:
+                input_widget = self.query_one("#message_input", Input)
+            except Exception:
+                return
+            if input_widget.has_focus and not input_widget.value and self._last_prompt:
+                input_widget.value = self._last_prompt
+                input_widget.cursor_position = len(input_widget.value)
+                self.sub_title = "Restored last prompt."
+                event.stop()
+
+    def _show_slash_menu(self, prefix: str) -> None:
+        try:
+            menu = self.query_one("#slash_menu", OptionList)
+        except Exception:
+            return
+        menu.clear_options()
+        normalized_prefix = prefix.lower()
+        for command, description in self._slash_commands:
+            if command.lower().startswith(normalized_prefix):
+                menu.add_option(f"{command} — {description}")
+        if menu.options:
+            menu.remove_class("hidden")
+        else:
+            menu.add_class("hidden")
+
+    def _hide_slash_menu(self) -> None:
+        try:
+            menu = self.query_one("#slash_menu", OptionList)
+        except Exception:
+            return
+        menu.add_class("hidden")
+        menu.clear_options()
+
 
     async def action_send_message(self) -> None:
         """Action invoked by keybinding for sending a message."""
@@ -884,6 +1054,20 @@ class OllamaChatApp(App[None]):
         cleaned = _IMAGE_PREFIX_RE.sub("", text).strip()
         return cleaned, paths
 
+    @staticmethod
+    def _parse_file_prefixes(text: str) -> tuple[str, list[str]]:
+        """Extract /file <path> directives from input text.
+
+        Returns (cleaned_text, [file_paths]).
+        """
+        paths: list[str] = []
+        matches = _FILE_PREFIX_RE.findall(text)
+        for path in matches:
+            expanded = os.path.expanduser(path)
+            paths.append(expanded)
+        cleaned = _FILE_PREFIX_RE.sub("", text).strip()
+        return cleaned, paths
+
     async def _handle_stream_error(
         self,
         bubble: MessageBubble | None,
@@ -904,6 +1088,7 @@ class OllamaChatApp(App[None]):
         """Collect input text and stream the assistant response into the UI."""
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
+        file_button = self.query_one("#file_button", Button)
         raw_text = input_widget.value.strip()
 
         # Parse /image <path> prefixes from text (vision capability).
@@ -912,15 +1097,21 @@ class OllamaChatApp(App[None]):
         if self._cap_vision_enabled:
             user_text, inline_images = self._parse_image_prefixes(raw_text)
 
+        # Parse /file <path> prefixes from text.
+        inline_files: list[str] = []
+        user_text, inline_files = self._parse_file_prefixes(user_text)
+
         # Combine inline images and images attached via the attach button.
         all_images: list[str] = inline_images + self._pending_images
+        all_files: list[str] = inline_files + list(self._pending_files)
 
-        if not user_text and not all_images:
+        if not user_text and not all_images and not all_files:
             self.sub_title = "Cannot send an empty message."
             return
 
         # Validate image paths before sending.
         valid_images: list[str | bytes] = []
+        valid_files: list[str] = []
         for img_path in all_images:
             if os.path.isfile(img_path):
                 valid_images.append(img_path)
@@ -930,6 +1121,16 @@ class OllamaChatApp(App[None]):
                     extra={"event": "app.vision.missing_image", "path": img_path},
                 )
                 self.sub_title = f"Image not found, skipping: {img_path}"
+
+        for file_path in all_files:
+            if os.path.isfile(file_path):
+                valid_files.append(file_path)
+            else:
+                LOGGER.warning(
+                    "app.file.missing",
+                    extra={"event": "app.file.missing", "path": file_path},
+                )
+                self.sub_title = f"File not found, skipping: {file_path}"
 
         # Atomic CAS: only proceed when IDLE → STREAMING succeeds.
         # This replaces a separate can_send_message() check, eliminating
@@ -951,10 +1152,12 @@ class OllamaChatApp(App[None]):
         )
         input_widget.disabled = True
         send_button.disabled = True
-        # Clear pending images now that we've consumed them.
+        file_button.disabled = True
+        # Clear pending images and files now that we've consumed them.
         self._pending_images = []
+        self._pending_files = []
         try:
-            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s)]"
+            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s), {len(valid_files)} file(s)]"
             self.sub_title = "Sending message..."
             await self._add_message(
                 content=display_text, role="user", timestamp=self._timestamp()
@@ -964,9 +1167,30 @@ class OllamaChatApp(App[None]):
                 content="", role="assistant", timestamp=self._timestamp()
             )
 
+            # Build file context to append to the user prompt for the API call.
+            file_context_parts: list[str] = []
+            for path in valid_files:
+                snippet = ""
+                try:
+                    snippet = Path(path).read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    snippet = "<unreadable file>"
+                max_chars = 4000
+                if len(snippet) > max_chars:
+                    snippet = snippet[:max_chars] + "\n... [truncated]"
+                file_context_parts.append(f"[File: {os.path.basename(path)}]\n{snippet}")
+
+            final_user_text = user_text
+            if file_context_parts:
+                file_context = "\n\n".join(file_context_parts)
+                final_user_text = f"{user_text}\n\n{file_context}" if user_text else file_context
+            self._last_prompt = final_user_text
+            self._save_last_prompt(final_user_text)
+            self._hide_slash_menu()
+
             self._active_stream_task = asyncio.create_task(
                 self._stream_assistant_response(
-                    user_text,
+                    final_user_text,
                     assistant_bubble,
                     images=valid_images if valid_images else None,
                 )
@@ -1044,6 +1268,7 @@ class OllamaChatApp(App[None]):
 
         self.chat.clear_history()
         self._pending_images = []
+        self._pending_files = []
         await self._clear_conversation_view()
         self._search_query = ""
         self._search_results = []

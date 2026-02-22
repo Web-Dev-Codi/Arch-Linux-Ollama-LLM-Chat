@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+import os
 import unittest
 
 from ollama_chat.exceptions import (
@@ -199,6 +200,40 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await app._activate_selected_model("qwen2.5")
             self.assertEqual(app.chat.model, current_model)
             self.assertEqual(app.sub_title, "Model switch is available only when idle.")
+
+    async def test_parse_file_prefixes(self) -> None:
+        app = self._build_app()
+        cleaned, paths = app._parse_file_prefixes("/file ~/notes.txt and more /file /tmp/x")
+        self.assertTrue(cleaned.startswith("and more"))
+        self.assertIn(os.path.expanduser("~/notes.txt"), paths)
+        self.assertIn("/tmp/x", paths)
+
+    async def test_extract_paths_from_paste(self) -> None:
+        app = self._build_app()
+        paths = app._extract_paths_from_paste("file:///tmp/a.png /home/user/b.txt")
+        self.assertEqual(paths, ["/tmp/a.png", "/home/user/b.txt"])
+
+    async def test_last_prompt_recall_on_up_key(self) -> None:
+        app = self._build_app()
+
+        class _DummyKey:
+            def __init__(self) -> None:
+                self.key = "up"
+                self.stopped = False
+
+            def stop(self) -> None:  # pragma: no cover - simple flag setter
+                self.stopped = True
+
+        async with app.run_test():
+            input_widget = app.query_one("#message_input", Input)
+            input_widget.value = "hello"
+            app._last_prompt = "previous prompt"
+            input_widget.value = ""
+            input_widget.focus()
+            event = _DummyKey()
+            app.on_key(event)
+            self.assertEqual(input_widget.value, "previous prompt")
+            self.assertTrue(event.stopped)
 
     async def test_on_unmount_cancels_background_tasks(self) -> None:
         """on_unmount() must cancel all background tasks without hanging."""

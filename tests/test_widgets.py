@@ -94,13 +94,13 @@ class MessageBubbleTests(unittest.TestCase):
 class InputBoxTests(unittest.TestCase):
     """Validate InputBox composition."""
 
-    def test_input_box_is_horizontal(self) -> None:
-        from textual.containers import Horizontal
+    def test_input_box_is_vertical(self) -> None:
+        from textual.containers import Vertical
 
         assert InputBox is not None
-        self.assertTrue(issubclass(InputBox, Horizontal))
+        self.assertTrue(issubclass(InputBox, Vertical))
 
-    def test_compose_yields_input_and_button(self) -> None:
+    def test_compose_yields_input_and_buttons(self) -> None:
         assert InputBox is not None
         assert Input is not None
         assert Button is not None
@@ -124,12 +124,23 @@ class InputBoxTests(unittest.TestCase):
         send_buttons = [b for b in buttons if b.id == "send_button"]
         self.assertEqual(len(send_buttons), 1)
 
-    def test_attach_button_present(self) -> None:
+    def test_attach_and_file_buttons_present(self) -> None:
         assert InputBox is not None
         box = InputBox()
         buttons = [w for w in box.compose() if isinstance(w, Button)]
         attach_buttons = [b for b in buttons if b.id == "attach_button"]
         self.assertEqual(len(attach_buttons), 1)
+        file_buttons = [b for b in buttons if b.id == "file_button"]
+        self.assertEqual(len(file_buttons), 1)
+
+    def test_slash_menu_present(self) -> None:
+        from textual.widgets import OptionList
+
+        assert InputBox is not None
+        box = InputBox()
+        option_lists = [w for w in box.compose() if isinstance(w, OptionList)]
+        self.assertEqual(len(option_lists), 1)
+        self.assertEqual(option_lists[0].id, "slash_menu")
 
 
 @unittest.skipIf(StatusBar is None, "textual is not installed")
