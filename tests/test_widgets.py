@@ -8,12 +8,15 @@ try:
     from textual.widgets import Input, Button, Label
 
     from ollama_chat.widgets.activity_bar import ActivityBar
+    from ollama_chat.widgets.code_block import CodeBlock, split_message
     from ollama_chat.widgets.conversation import ConversationView
     from ollama_chat.widgets.input_box import InputBox
     from ollama_chat.widgets.message import MessageBubble
     from ollama_chat.widgets.status_bar import StatusBar
 except ModuleNotFoundError:
     ActivityBar = None  # type: ignore[assignment,misc]
+    CodeBlock = None  # type: ignore[assignment,misc]
+    split_message = None  # type: ignore[assignment]
     MessageBubble = None  # type: ignore[assignment,misc]
     ConversationView = None  # type: ignore[assignment,misc]
     InputBox = None  # type: ignore[assignment,misc]
@@ -273,6 +276,80 @@ class ConversationViewTests(unittest.IsolatedAsyncioTestCase):
             conv = app.query_one("#conv", ConversationView)
             bubble = await conv.add_message(content="hi", role="user")
             self.assertIn("message-user", bubble.classes)
+
+
+@unittest.skipIf(CodeBlock is None, "textual is not installed")
+class SplitMessageTests(unittest.TestCase):
+    """Validate the split_message helper."""
+
+    def test_plain_text_returns_single_prose_segment(self) -> None:
+        assert split_message is not None
+        segments = split_message("Hello world")
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0][1], None)
+
+    def test_code_block_extracted(self) -> None:
+        assert split_message is not None
+        text = "Before\n```python\nprint('hi')\n```\nAfter"
+        segments = split_message(text)
+        langs = [lang for _, lang in segments]
+        self.assertIn("python", langs)
+        self.assertIn(None, langs)
+
+    def test_code_content_correct(self) -> None:
+        assert split_message is not None
+        text = "```js\nconsole.log(1)\n```"
+        segments = split_message(text)
+        code_segs = [(c, l) for c, l in segments if l is not None]
+        self.assertEqual(len(code_segs), 1)
+        self.assertIn("console.log(1)", code_segs[0][0])
+        self.assertEqual(code_segs[0][1], "js")
+
+    def test_no_lang_fence_uses_empty_string(self) -> None:
+        assert split_message is not None
+        text = "```\nsome code\n```"
+        segments = split_message(text)
+        code_segs = [(c, l) for c, l in segments if l is not None]
+        self.assertEqual(code_segs[0][1], "")
+
+    def test_multiple_code_blocks(self) -> None:
+        assert split_message is not None
+        text = "```py\na = 1\n```\nmiddle\n```bash\necho hi\n```"
+        segments = split_message(text)
+        code_segs = [l for _, l in segments if l is not None]
+        self.assertEqual(len(code_segs), 2)
+
+
+@unittest.skipIf(CodeBlock is None, "textual is not installed")
+class CodeBlockWidgetTests(unittest.IsolatedAsyncioTestCase):
+    """Validate CodeBlock widget composition and copy message."""
+
+    def test_code_and_lang_stored(self) -> None:
+        assert CodeBlock is not None
+        cb = CodeBlock(code="print('hi')", lang="python")
+        self.assertEqual(cb._code, "print('hi')")
+        self.assertEqual(cb._lang, "python")
+
+    async def test_copy_requested_message_posted(self) -> None:
+        from textual.app import App, ComposeResult
+
+        assert CodeBlock is not None
+        received: list[str] = []
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield CodeBlock(code="x = 1", lang="python", id="cb")
+
+            def on_code_block_copy_requested(
+                self, event: CodeBlock.CopyRequested
+            ) -> None:
+                received.append(event.code)
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.click("#copy-btn")
+            await pilot.pause()
+        self.assertEqual(received, ["x = 1"])
 
 
 @unittest.skipIf(ActivityBar is None, "textual is not installed")

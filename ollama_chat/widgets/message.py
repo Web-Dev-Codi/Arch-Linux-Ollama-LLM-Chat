@@ -10,6 +10,8 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from .code_block import CodeBlock, split_message
+
 
 class MessageBubble(Vertical):
     """Render a single chat message with role, optional timestamp, thinking, and tool traces."""
@@ -36,6 +38,10 @@ class MessageBubble(Vertical):
     MessageBubble > #content-block {
         height: auto;
     }
+    MessageBubble > .prose-segment {
+        height: auto;
+        padding: 0;
+    }
     """
 
     def __init__(
@@ -60,6 +66,8 @@ class MessageBubble(Vertical):
         self._thinking_widget: Static | None = None
         self._tool_widget: Static | None = None
         self._content_widget: Static | None = None
+        # Mounted content segment widgets (prose + code blocks).
+        self._segment_widgets: list[Static | CodeBlock] = []
 
     @property
     def role_prefix(self) -> str:
@@ -79,6 +87,7 @@ class MessageBubble(Vertical):
         )
         self._thinking_widget = Static("", id="thinking-block")
         self._tool_widget = Static("", id="tool-trace")
+        # content-block is a plain Static used during streaming; replaced on finalise.
         self._content_widget = Static("", id="content-block")
 
         yield self._header_widget
@@ -94,9 +103,44 @@ class MessageBubble(Vertical):
     def _refresh_content(self) -> None:
         if self._content_widget is None:
             return
-        # Only the content (not the static header) is re-parsed on each update.
+        # During streaming we update the plain Static for performance.
         text = self.message_content.rstrip()
         self._content_widget.update(Markdown(text) if text else "")
+
+    async def _rebuild_content_segments(self) -> None:
+        """Replace the plain content-block with per-segment prose/code widgets."""
+        text = self.message_content.rstrip()
+        segments = split_message(text)
+
+        # Remove old segment widgets from a previous rebuild.
+        for w in self._segment_widgets:
+            await w.remove()
+        self._segment_widgets = []
+
+        # Hide the streaming Static; segments take over rendering.
+        if self._content_widget is not None:
+            self._content_widget.display = False
+
+        for content, lang in segments:
+            if lang is None:
+                # Prose segment.
+                widget: Static | CodeBlock = Static(
+                    Markdown(content), classes="prose-segment"
+                )
+            else:
+                widget = CodeBlock(code=content, lang=lang)
+            self._segment_widgets.append(widget)
+            await self.mount(widget)
+
+    def on_code_block_copy_requested(self, event: CodeBlock.CopyRequested) -> None:
+        """Forward copy request to the app clipboard."""
+        event.stop()
+        app = self.app
+        if hasattr(app, "copy_to_clipboard"):
+            app.copy_to_clipboard(event.code)  # type: ignore[attr-defined]
+            app.sub_title = "Code copied to clipboard."
+        else:
+            app.sub_title = "Clipboard unavailable."
 
     def _refresh_thinking(self) -> None:
         if not self.show_thinking or self._thinking_widget is None:
@@ -129,6 +173,10 @@ class MessageBubble(Vertical):
         """Append streamed content and rerender once per batch."""
         self.message_content += content_chunk
         self._refresh_content()
+
+    async def finalize_content(self) -> None:
+        """Rebuild content into prose+code segments after streaming ends."""
+        await self._rebuild_content_segments()
 
     def append_thinking(self, thinking_chunk: str) -> None:
         """Accumulate a streamed thinking token and rerender the thinking block."""

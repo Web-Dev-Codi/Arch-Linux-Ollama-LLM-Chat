@@ -1164,6 +1164,7 @@ class OllamaChatApp(App[None]):
 
             if not response_started:
                 assistant_bubble.set_content("(No response from model.)")
+            await assistant_bubble.finalize_content()
             self._update_status_bar()
         finally:
             await self._stop_response_indicator_task()
@@ -1478,9 +1479,10 @@ class OllamaChatApp(App[None]):
             if role == "system":
                 continue
             content = str(message.get("content", ""))
-            await self._add_message(
+            bubble = await self._add_message(
                 content=content, role=role, timestamp=self._timestamp()
             )
+            await bubble.finalize_content()
 
     def _auto_save_on_exit(self) -> None:
         """Persist conversation on exit when auto_save is enabled."""

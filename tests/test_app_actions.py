@@ -20,6 +20,9 @@ class _FakeBubble:
     def scroll_visible(self, animate: bool = False) -> None:  # noqa: ARG002
         self.visible = True
 
+    async def finalize_content(self) -> None:
+        pass
+
 
 class _FakeConversation:
     def __init__(self) -> None:
