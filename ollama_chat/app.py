@@ -7,6 +7,7 @@ from datetime import datetime
 import inspect
 import logging
 import os
+import sys
 import re
 import shutil
 import subprocess
@@ -281,6 +282,14 @@ class OllamaChatApp(App[None]):
         self.window_title = str(self.config["app"]["title"])
         self.window_class = str(self.config["app"]["class"])
         configure_logging(self.config["logging"])
+        LOGGER.info(
+            "app.python",
+            extra={
+                "event": "app.python",
+                "executable": sys.executable,
+                "version": sys.version.split()[0],
+            },
+        )
 
         ollama_cfg = self.config["ollama"]
         configured_default_model = str(ollama_cfg["model"])
