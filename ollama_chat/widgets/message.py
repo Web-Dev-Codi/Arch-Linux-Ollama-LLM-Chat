@@ -7,8 +7,8 @@ from typing import Any
 from rich.markdown import Markdown
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Static
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, Static
 
 from .code_block import CodeBlock, split_message
 
@@ -42,6 +42,20 @@ class MessageBubble(Vertical):
         height: auto;
         padding: 0;
     }
+    MessageBubble #copy-row {
+        height: auto;
+        padding: 0 0 1 0;
+        align-horizontal: right;
+    }
+    MessageBubble #copy-row Button {
+        border: none;
+        background: transparent;
+        color: $text-muted;
+    }
+    MessageBubble #copy-row Button:hover {
+        color: $text;
+        background: $panel;
+    }
     """
 
     def __init__(
@@ -68,6 +82,7 @@ class MessageBubble(Vertical):
         self._content_widget: Static | None = None
         # Mounted content segment widgets (prose + code blocks).
         self._segment_widgets: list[Static | CodeBlock] = []
+        self._copy_button: Button | None = None
 
     @property
     def role_prefix(self) -> str:
@@ -95,10 +110,16 @@ class MessageBubble(Vertical):
             yield self._thinking_widget
         yield self._tool_widget
         yield self._content_widget
+        copy_button = Button("⎘ copy reply", id="copy-message-btn")
+        self._copy_button = copy_button
+        with Horizontal(id="copy-row"):
+            yield copy_button
 
     def on_mount(self) -> None:
         """Perform initial content render after mount."""
         self._refresh_content()
+        if self._copy_button is not None and self.role == "user":
+            self._copy_button.display = False
 
     def _refresh_content(self) -> None:
         if self._content_widget is None:
@@ -139,6 +160,22 @@ class MessageBubble(Vertical):
         if hasattr(app, "copy_to_clipboard"):
             app.copy_to_clipboard(event.code)  # type: ignore[attr-defined]
             app.sub_title = "Code copied to clipboard."
+        else:
+            app.sub_title = "Clipboard unavailable."
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Copy entire message content when the copy button is clicked."""
+        if event.button.id != "copy-message-btn":
+            return
+        event.stop()
+        app = self.app
+        text = self.message_content.strip()
+        if not text:
+            app.sub_title = "Nothing to copy."
+            return
+        if hasattr(app, "copy_to_clipboard"):
+            app.copy_to_clipboard(text)  # type: ignore[attr-defined]
+            app.sub_title = "Reply copied to clipboard."
         else:
             app.sub_title = "Clipboard unavailable."
 

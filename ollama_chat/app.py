@@ -325,8 +325,9 @@ class OllamaChatApp(App[None]):
     }
 
     #activity_bar {
-        height: 1;
-        padding: 0 1;
+        height: auto;
+        min-height: 2;
+        padding: 0 1 0 1;
         border-top: dashed $panel;
         background: $surface;
     }

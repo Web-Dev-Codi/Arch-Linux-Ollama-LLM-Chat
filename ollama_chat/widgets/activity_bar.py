@@ -7,7 +7,10 @@ import logging
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.widgets import Label, Static
+from textual.containers import Horizontal, Vertical
+from textual.message import Message
+from textual.timer import Timer
+from textual.widgets import Button, Label, Static
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,13 +51,19 @@ class ActivityBar(Static):
     ) -> None:
         super().__init__(**kwargs)
         self._shortcut_hints = shortcut_hints
-        self._animation_task: asyncio.Task[None] | None = None
+        self._animation_timer: Timer | None = None
         self._running = False
+        self._frame_index = 0
+        self._hint = "esc interrupt"
+        self._left_label: Label | None = None
 
     def compose(self) -> ComposeResult:
         """Compose left (animation) and right (shortcuts) labels."""
         yield Label("", id="activity_left")
         yield Label(self._shortcut_hints, id="activity_right")
+
+    def on_mount(self) -> None:
+        self._left_label = self.query_one("#activity_left", Label)
 
     def set_shortcut_hints(self, hints: str) -> None:
         """Update the right-side shortcut hint text."""
@@ -69,31 +78,28 @@ class ActivityBar(Static):
         if self._running:
             return
         self._running = True
-        self._animation_task = asyncio.create_task(self._animate(hint))
+        self._hint = hint
+        self._frame_index = 0
+        self._update_left()
+        self._animation_timer = self.set_interval(0.12, self._advance_frame)
 
     def stop_activity(self) -> None:
         """Stop the animation and clear the left label."""
         self._running = False
-        task = self._animation_task
-        self._animation_task = None
-        if task is not None and not task.done():
-            task.cancel()
-        try:
-            self.query_one("#activity_left", Label).update("")
-        except Exception:
-            pass
+        if self._animation_timer is not None:
+            self._animation_timer.stop()
+            self._animation_timer = None
+        if self._left_label is not None:
+            self._left_label.update("")
 
-    async def _animate(self, hint: str) -> None:
-        """Cycle through animation frames until stopped."""
-        left = self.query_one("#activity_left", Label)
-        frame_index = 0
-        try:
-            while self._running:
-                frame = _ANIMATION_FRAMES[frame_index % len(_ANIMATION_FRAMES)]
-                left.update(f"{frame}  {hint}")
-                frame_index += 1
-                await asyncio.sleep(0.12)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            left.update("")
+    def _advance_frame(self) -> None:
+        if not self._running:
+            return
+        self._frame_index = (self._frame_index + 1) % len(_ANIMATION_FRAMES)
+        self._update_left()
+
+    def _update_left(self) -> None:
+        if self._left_label is None:
+            return
+        frame = _ANIMATION_FRAMES[self._frame_index % len(_ANIMATION_FRAMES)]
+        self._left_label.update(f"{frame}  {self._hint}")
