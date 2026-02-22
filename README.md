@@ -378,6 +378,40 @@ Build configuration lives in `pyproject.toml`.
 
 ---
 
+## Building
+
+### Local wheel build (isolated)
+
+```bash
+python -m pip install build
+python -m build --wheel
+# optional: install into current env
+python -m pip install --force-reinstall dist/*.whl
+# or install for user with pipx
+pipx install .
+```
+
+Troubleshooting: if you see `BackendUnavailable: Cannot import 'setuptools.build_meta'`, either run the isolated build above, or install/upgrade in your active environment:
+
+```bash
+python -m pip install -U setuptools wheel build
+# For Python 3.14 pre-releases, you may need:
+python -m pip install --pre -U setuptools
+```
+
+### Arch package (PKGBUILD)
+
+This repo ships a `PKGBUILD` that builds without network access using system makedepends:
+
+```bash
+sudo pacman -S --needed base-devel python-setuptools python-build python-installer python-wheel
+makepkg -si
+```
+
+The `build()` step uses `python -m build --wheel --no-isolation` so it relies on the above makedepends instead of downloading during build.
+
+---
+
 ## Development
 
 ```bash

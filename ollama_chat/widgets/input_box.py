@@ -10,6 +10,12 @@ from textual.widgets import Button, Input, OptionList
 class InputBox(Vertical):
     """Input region with message field, attach buttons, send button, and slash menu."""
 
+    DEFAULT_CSS = """
+    InputBox {
+        height: auto;
+    }
+    """
+
     class AttachRequested(Message):
         """Posted when the user clicks the image attach button."""
 

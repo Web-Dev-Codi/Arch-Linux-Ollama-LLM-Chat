@@ -222,6 +222,10 @@ class OllamaChatApp(App[None]):
         min-width: 10;
     }
 
+    #input_row {
+        height: auto;
+    }
+
     #status_bar {
         height: auto;
         padding: 0 1;
