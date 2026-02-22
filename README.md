@@ -26,22 +26,39 @@
 
 ## Table of Contents
 
-- [Why Ollama Chat TUI?](#why-ollama-chat-tui)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [Config File Location](#config-file-location)
-  - [All Options](#all-options)
-- [Keybinds](#keybinds)
-- [Capabilities](#capabilities)
-- [Desktop Integration](#desktop-integration)
-  - [Hyprland + Ghostty](#hyprland--ghostty)
-  - [Desktop Entry](#desktop-entry)
-- [Packaging](#packaging)
-- [Development](#development)
-- [Troubleshooting](#troubleshooting)
+- [Ollama Chat TUI](#ollama-chat-tui)
+  - [Table of Contents](#table-of-contents)
+  - [Why Ollama Chat TUI?](#why-ollama-chat-tui)
+  - [Features](#features)
+    - [Core Chat](#core-chat)
+    - [Model Management](#model-management)
+    - [Conversation Persistence](#conversation-persistence)
+    - [Capabilities (optional)](#capabilities-optional)
+    - [Interface \& Integration](#interface--integration)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+    - [From source (recommended)](#from-source-recommended)
+    - [Developer / contributor install](#developer--contributor-install)
+    - [Arch Linux (PKGBUILD)](#arch-linux-pkgbuild)
+  - [Quick Start](#quick-start)
+  - [Configuration](#configuration)
+    - [Config File Location](#config-file-location)
+    - [All Options](#all-options)
+  - [Keybinds](#keybinds)
+  - [Capabilities](#capabilities)
+    - [Chain-of-thought reasoning](#chain-of-thought-reasoning)
+    - [Tool calling](#tool-calling)
+    - [Web search](#web-search)
+    - [Vision / image attachments](#vision--image-attachments)
+  - [Desktop Integration](#desktop-integration)
+    - [Hyprland + Ghostty](#hyprland--ghostty)
+    - [Desktop Entry](#desktop-entry)
+  - [Packaging / Building](#packaging--building)
+    - [Local wheel build (isolated)](#local-wheel-build-isolated)
+    - [Arch package (PKGBUILD)](#arch-package-pkgbuild)
+  - [Development](#development)
+  - [Troubleshooting](#troubleshooting)
+  - [License](#license)
 
 ---
 
@@ -125,8 +142,6 @@ pip install -e .
 
 ### Developer / contributor install
 
-Includes test runners, linter, formatter, and type checker:
-
 ```bash
 pip install -e '.[dev]'
 ```
@@ -151,8 +166,6 @@ ollama pull llama3.2
 ```
 
 **2. (Optional) Copy the example config**
-
-The app works out of the box with sensible defaults. To customize:
 
 ```bash
 mkdir -p ~/.config/ollama-chat
@@ -367,18 +380,7 @@ Categories=Utility;TerminalEmulator;Development;
 
 ---
 
-## Packaging
-
-| Format | Instructions |
-|---|---|
-| Python wheel | `python -m build --wheel --no-isolation` |
-| Arch Linux | `makepkg -si` (uses included `PKGBUILD`) |
-
-Build configuration lives in `pyproject.toml`.
-
----
-
-## Building
+## Packaging / Building
 
 ### Local wheel build (isolated)
 

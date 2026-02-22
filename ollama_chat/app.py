@@ -1088,12 +1088,55 @@ class OllamaChatApp(App[None]):
             bubble.set_content(message)
         self.sub_title = subtitle
 
+    async def _dispatch_slash_command(self, raw_text: str) -> bool:
+        """Intercept and execute slash commands. Returns True if handled."""
+        lower = raw_text.lower()
+        input_widget = self.query_one("#message_input", Input)
+
+        if lower == "/new":
+            input_widget.value = ""
+            self._hide_slash_menu()
+            await self.action_new_conversation()
+            return True
+
+        if lower == "/clear":
+            input_widget.value = ""
+            self._hide_slash_menu()
+            self.sub_title = "Input cleared."
+            return True
+
+        if lower == "/help":
+            input_widget.value = ""
+            self._hide_slash_menu()
+            await self.action_command_palette()
+            return True
+
+        if lower.startswith("/model"):
+            parts = raw_text.split(maxsplit=1)
+            input_widget.value = ""
+            self._hide_slash_menu()
+            if len(parts) == 2 and parts[1].strip():
+                model_name = parts[1].strip()
+                task = asyncio.create_task(self._activate_selected_model(model_name))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            else:
+                await self._open_configured_model_picker()
+            return True
+
+        return False
+
     async def send_user_message(self) -> None:
         """Collect input text and stream the assistant response into the UI."""
         input_widget = self.query_one("#message_input", Input)
         send_button = self.query_one("#send_button", Button)
         file_button = self.query_one("#file_button", Button)
         raw_text = input_widget.value.strip()
+
+        # Intercept slash commands before sending to LLM.
+        if raw_text.startswith("/"):
+            if await self._dispatch_slash_command(raw_text):
+                return
 
         # Parse /image <path> prefixes from text (vision capability).
         inline_images: list[str] = []

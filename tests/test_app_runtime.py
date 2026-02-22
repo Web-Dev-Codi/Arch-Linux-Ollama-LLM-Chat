@@ -303,5 +303,53 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(app.persistence.saved)
 
 
+    async def test_slash_new_dispatches_new_conversation(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            input_widget = app.query_one("#message_input", Input)
+            input_widget.value = "/new"
+            await app.send_user_message()
+            self.assertEqual(input_widget.value, "")
+            self.assertEqual(len(app.chat.messages), 1)
+
+    async def test_slash_clear_clears_input(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            input_widget = app.query_one("#message_input", Input)
+            input_widget.value = "/clear"
+            await app.send_user_message()
+            self.assertEqual(input_widget.value, "")
+            self.assertEqual(app.sub_title, "Input cleared.")
+
+    async def test_slash_model_bare_dispatches(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            picker_called = []
+
+            async def _fake_picker() -> None:
+                picker_called.append(True)
+
+            app._open_configured_model_picker = _fake_picker  # type: ignore[assignment]
+            handled = await app._dispatch_slash_command("/model")
+            self.assertTrue(handled)
+            self.assertTrue(picker_called)
+
+    async def test_slash_model_with_name_switches(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            input_widget = app.query_one("#message_input", Input)
+            input_widget.value = "/model qwen2.5"
+            await app.send_user_message()
+            self.assertEqual(input_widget.value, "")
+
+    async def test_unknown_slash_falls_through_to_llm(self) -> None:
+        app = self._build_app()
+        async with app.run_test():
+            input_widget = app.query_one("#message_input", Input)
+            input_widget.value = "/image ~/photo.png describe this"
+            await app.send_user_message()
+            self.assertNotEqual(app.sub_title, "Input cleared.")
+
+
 if __name__ == "__main__":
     unittest.main()
