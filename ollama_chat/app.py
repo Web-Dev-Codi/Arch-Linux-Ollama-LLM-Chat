@@ -37,6 +37,7 @@ from .tools import ToolRegistry, build_default_registry
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
 from .widgets.message import MessageBubble
+from .widgets.activity_bar import ActivityBar
 from .widgets.status_bar import StatusBar
 
 LOGGER = logging.getLogger(__name__)
@@ -44,6 +45,96 @@ LOGGER = logging.getLogger(__name__)
 # Pattern matching /image <path> and /file <path> prefixes anywhere in the input text.
 _IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
 _FILE_PREFIX_RE = re.compile(r"(?:^|\s)/file\s+(\S+)")
+
+
+async def _open_native_file_dialog(
+    title: str = "Open File",
+    file_filter: list[tuple[str, list[str]]] | None = None,
+) -> str | None:
+    """Open a native Linux file picker, trying multiple backends.
+
+    Tries xdg-desktop-portal (via gdbus), then zenity, then kdialog.
+    Returns the selected file path or None if cancelled/unavailable.
+    """
+
+    # --- Portal via gdbus (Wayland/Hyprland-friendly) ---
+    gdbus_bin = shutil.which("gdbus")
+    if gdbus_bin is not None:
+        try:
+            handle_token = f"ollama_chat_{os.getpid()}"
+            proc = await asyncio.create_subprocess_exec(
+                gdbus_bin,
+                "call",
+                "--session",
+                "--dest=org.freedesktop.portal.Desktop",
+                "--object-path=/org/freedesktop/portal/desktop",
+                "--method=org.freedesktop.portal.FileChooser.OpenFile",
+                "",
+                title,
+                f"{{'handle_token': <'{handle_token}'>}}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode == 0:
+                output = stdout.decode().strip()
+                if "file://" in output:
+                    import urllib.parse
+
+                    for token in output.split():
+                        cleaned = token.strip("',()><[]")
+                        if cleaned.startswith("file://"):
+                            return urllib.parse.unquote(
+                                cleaned[len("file://") :]
+                            )
+        except (asyncio.TimeoutError, OSError):
+            pass
+
+    # --- zenity ---
+    zenity_bin = shutil.which("zenity")
+    if zenity_bin is not None:
+        cmd: list[str] = [zenity_bin, "--file-selection", f"--title={title}"]
+        if file_filter:
+            for name, patterns in file_filter:
+                cmd.append(f"--file-filter={name} | {' '.join(patterns)}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode == 0:
+                path = stdout.decode().strip()
+                if path:
+                    return path
+        except (asyncio.TimeoutError, OSError):
+            pass
+
+    # --- kdialog ---
+    kdialog_bin = shutil.which("kdialog")
+    if kdialog_bin is not None:
+        cmd = [kdialog_bin, "--getopenfilename", ".", title]
+        if file_filter:
+            filter_str = " ".join(
+                p for _, patterns in file_filter for p in patterns
+            )
+            cmd = [kdialog_bin, "--getopenfilename", ".", filter_str]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode == 0:
+                path = stdout.decode().strip()
+                if path:
+                    return path
+        except (asyncio.TimeoutError, OSError):
+            pass
+
+    return None
 
 
 class ModelPickerScreen(ModalScreen[str | None]):
@@ -230,6 +321,13 @@ class OllamaChatApp(App[None]):
         height: auto;
         padding: 0 1;
         border-top: solid $panel;
+        background: $surface;
+    }
+
+    #activity_bar {
+        height: 1;
+        padding: 0 1;
+        border-top: dashed $panel;
         background: $surface;
     }
 
@@ -526,6 +624,10 @@ class OllamaChatApp(App[None]):
             yield ConversationView(id="conversation")
             yield InputBox()
             yield StatusBar(id="status_bar")
+            yield ActivityBar(
+                shortcut_hints="ctrl+p commands",
+                id="activity_bar",
+            )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -555,6 +657,10 @@ class OllamaChatApp(App[None]):
         attach_button.disabled = not self._cap_vision_enabled
         file_button.disabled = False
         self._update_status_bar()
+
+        activity_bar = self.query_one("#activity_bar", ActivityBar)
+        palette_key = self._command_palette_key_display().lower()
+        activity_bar.set_shortcut_hints(f"{palette_key} commands")
 
         self._startup_model_task = asyncio.create_task(self._prepare_startup_model())
         self._background_tasks.add(self._startup_model_task)
@@ -782,18 +888,36 @@ class OllamaChatApp(App[None]):
     async def on_input_box_attach_requested(
         self, _message: InputBox.AttachRequested
     ) -> None:
-        """Open image attach dialog when attach button is clicked."""
+        """Open native image picker when attach button is clicked."""
         if not self._cap_vision_enabled:
             self.sub_title = "Vision is disabled in capabilities config."
             return
-        self.push_screen(ImageAttachScreen(), callback=self._on_image_attach_dismissed)
+        image_filter = [
+            ("Images", ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.webp", "*.tiff", "*.tif"]),
+        ]
+        path = await _open_native_file_dialog(
+            title="Attach image", file_filter=image_filter
+        )
+        if path is None:
+            # Fallback to modal dialog if no native picker available.
+            self.push_screen(
+                ImageAttachScreen(), callback=self._on_image_attach_dismissed
+            )
+            return
+        self._on_image_attach_dismissed(path)
 
     async def on_input_box_file_attach_requested(
         self, _message: InputBox.FileAttachRequested
     ) -> None:
-        """Open file picker dialog when file attach button is clicked."""
-        # Reuse image attach dialog semantics for now (path entry).
-        self.push_screen(ImageAttachScreen(), callback=self._on_file_attach_dismissed)
+        """Open native file picker when file button is clicked."""
+        path = await _open_native_file_dialog(title="Attach file")
+        if path is None:
+            # Fallback to modal dialog if no native picker available.
+            self.push_screen(
+                ImageAttachScreen(), callback=self._on_file_attach_dismissed
+            )
+            return
+        self._on_file_attach_dismissed(path)
 
     def _on_image_attach_dismissed(self, path: str | None) -> None:
         if not path:
@@ -1200,6 +1324,10 @@ class OllamaChatApp(App[None]):
         input_widget.disabled = True
         send_button.disabled = True
         file_button.disabled = True
+        try:
+            self.query_one("#activity_bar", ActivityBar).start_activity()
+        except Exception:
+            pass
         # Clear pending images and files now that we've consumed them.
         self._pending_images = []
         self._pending_files = []
@@ -1284,6 +1412,10 @@ class OllamaChatApp(App[None]):
                 "Chat error",
             )
         finally:
+            try:
+                self.query_one("#activity_bar", ActivityBar).stop_activity()
+            except Exception:
+                pass
             input_widget.disabled = False
             send_button.disabled = False
             input_widget.focus()

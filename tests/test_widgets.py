@@ -7,11 +7,13 @@ import unittest
 try:
     from textual.widgets import Input, Button, Label
 
+    from ollama_chat.widgets.activity_bar import ActivityBar
     from ollama_chat.widgets.conversation import ConversationView
     from ollama_chat.widgets.input_box import InputBox
     from ollama_chat.widgets.message import MessageBubble
     from ollama_chat.widgets.status_bar import StatusBar
 except ModuleNotFoundError:
+    ActivityBar = None  # type: ignore[assignment,misc]
     MessageBubble = None  # type: ignore[assignment,misc]
     ConversationView = None  # type: ignore[assignment,misc]
     InputBox = None  # type: ignore[assignment,misc]
@@ -271,6 +273,71 @@ class ConversationViewTests(unittest.IsolatedAsyncioTestCase):
             conv = app.query_one("#conv", ConversationView)
             bubble = await conv.add_message(content="hi", role="user")
             self.assertIn("message-user", bubble.classes)
+
+
+@unittest.skipIf(ActivityBar is None, "textual is not installed")
+class ActivityBarTests(unittest.IsolatedAsyncioTestCase):
+    """Validate ActivityBar composition and start/stop behaviour."""
+
+    def test_activity_bar_is_static_subclass(self) -> None:
+        from textual.widgets import Static
+
+        assert ActivityBar is not None
+        self.assertTrue(issubclass(ActivityBar, Static))
+
+    def test_compose_produces_left_and_right_labels(self) -> None:
+        assert ActivityBar is not None
+        bar = ActivityBar(shortcut_hints="ctrl+p commands")
+        children = list(bar.compose())
+        ids = [getattr(w, "id", None) for w in children]
+        self.assertIn("activity_left", ids)
+        self.assertIn("activity_right", ids)
+
+    def test_shortcut_hints_stored(self) -> None:
+        assert ActivityBar is not None
+        bar = ActivityBar(shortcut_hints="ctrl+p commands")
+        self.assertEqual(bar._shortcut_hints, "ctrl+p commands")
+
+    def test_start_sets_running_flag(self) -> None:
+        """start_activity sets the running flag (animation needs event loop)."""
+        from textual.app import App, ComposeResult
+
+        assert ActivityBar is not None
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield ActivityBar(shortcut_hints="ctrl+p commands", id="ab")
+
+        async def _run() -> None:
+            app = _TestApp()
+            async with app.run_test():
+                ab = app.query_one("#ab", ActivityBar)
+                ab.start_activity()
+                self.assertTrue(ab._running)
+                ab.stop_activity()
+                self.assertFalse(ab._running)
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(_run())
+
+    async def test_stop_clears_running_flag(self) -> None:
+        from textual.app import App, ComposeResult
+
+        assert ActivityBar is not None
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield ActivityBar(shortcut_hints="ctrl+p commands", id="ab")
+
+        app = _TestApp()
+        async with app.run_test():
+            ab = app.query_one("#ab", ActivityBar)
+            ab.start_activity()
+            self.assertTrue(ab._running)
+            ab.stop_activity()
+            self.assertFalse(ab._running)
+            self.assertIsNone(ab._animation_task)
 
 
 if __name__ == "__main__":

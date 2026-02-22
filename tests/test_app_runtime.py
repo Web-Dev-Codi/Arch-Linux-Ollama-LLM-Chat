@@ -351,5 +351,18 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(app.sub_title, "Input cleared.")
 
 
+class NativeFileDialogTests(unittest.IsolatedAsyncioTestCase):
+    """Validate _open_native_file_dialog fallback behaviour."""
+
+    async def test_returns_none_when_no_picker_available(self) -> None:
+        from unittest.mock import patch
+
+        from ollama_chat.app import _open_native_file_dialog
+
+        with patch("ollama_chat.app.shutil.which", return_value=None):
+            result = await _open_native_file_dialog(title="Test")
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
