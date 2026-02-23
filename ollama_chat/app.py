@@ -39,6 +39,7 @@ from .logging_utils import configure_logging
 from .persistence import ConversationPersistence
 from .screens import (
     ConversationPickerScreen,
+    ImageAttachScreen,
     InfoScreen,
     SimplePickerScreen,
     TextPromptScreen,
@@ -392,6 +393,7 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "Copy Last",
         "toggle_conversation_picker": "Conversations",
         "toggle_prompt_preset_picker": "Prompt",
+        "interrupt_stream": "Interrupt",
     }
 
     KEY_TO_ACTION: dict[str, str] = {
@@ -409,6 +411,7 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "copy_last_message",
         "toggle_conversation_picker": "toggle_conversation_picker",
         "toggle_prompt_preset_picker": "toggle_prompt_preset_picker",
+        "interrupt_stream": "interrupt_stream",
     }
 
     RESPONSE_PLACEHOLDER_FRAMES: tuple[str, ...] = (
@@ -474,6 +477,7 @@ class OllamaChatApp(App[None]):
         self._connection_state = ConnectionState.UNKNOWN
         self._search = SearchState()
         self._attachments = AttachmentState()
+        self._image_dialog_active = False
         self._last_prompt: str = ""
 
         self._slash_commands: list[tuple[str, str]] = [
@@ -1017,12 +1021,20 @@ class OllamaChatApp(App[None]):
             title = "Attach file"
             callback = self._on_file_attach_dismissed
 
-        path = await _open_native_file_dialog(title=title, file_filter=file_filter)
-        if path is None:
-            # Fallback to modal dialog if no native picker available.
-            self.push_screen(ImageAttachScreen(), callback=callback)
-            return
-        callback(path)
+        if mode == "image":
+            if self._image_dialog_active:
+                return
+            self._image_dialog_active = True
+        try:
+            path = await _open_native_file_dialog(title=title, file_filter=file_filter)
+            if path is None:
+                # Fallback to modal dialog if no native picker available.
+                self.push_screen(ImageAttachScreen(), callback=callback)
+                return
+            callback(path)
+        finally:
+            if mode == "image":
+                self._image_dialog_active = False
 
     async def on_input_box_attach_requested(
         self, _message: InputBox.AttachRequested
@@ -1040,6 +1052,7 @@ class OllamaChatApp(App[None]):
         await self._open_attachment_dialog("file")
 
     def _on_image_attach_dismissed(self, path: str | None) -> None:
+        self._image_dialog_active = False
         if not path:
             return
         ok, message, resolved = _validate_attachment(
@@ -1189,7 +1202,6 @@ class OllamaChatApp(App[None]):
         menu.add_class("hidden")
         menu.clear_options()
 
-
     async def action_send_message(self) -> None:
         """Action invoked by keybinding for sending a message."""
         await self.send_user_message()
@@ -1292,249 +1304,16 @@ class OllamaChatApp(App[None]):
             bubble.set_content(message)
         self.sub_title = subtitle
 
-    def _build_slash_registry(self) -> dict[str, _SlashCommand]:
-        """Build the default mapping of slash command prefixes to async handlers."""
-
-        async def _handle_new(_args: str) -> None:
-            await self.action_new_conversation()
-
-        async def _handle_clear(_args: str) -> None:
-            self.sub_title = "Input cleared."
-
-        async def _handle_help(_args: str) -> None:
-            await self.action_command_palette()
-
-        async def _handle_model(args: str) -> None:
-            if args.strip():
-                model_name = args.strip()
-                self._task_manager.add(
-                    asyncio.create_task(self._activate_selected_model(model_name))
-                )
-            else:
-                await self._open_configured_model_picker()
-
-        async def _handle_preset(args: str) -> None:
-            name = args.strip()
-            if not name:
-                await self.action_toggle_prompt_preset_picker()
-                return
-            if name not in self._prompt_presets:
-                self.sub_title = f"Unknown preset: {name}"
-                return
-            self._active_prompt_preset = name
-            preset_value = self._prompt_presets.get(name, "").strip()
-            if preset_value:
-                self.chat.system_prompt = preset_value
-            self.sub_title = f"Prompt preset set: {name}"
-
-        async def _handle_conversations(_args: str) -> None:
-            await self.action_toggle_conversation_picker()
-
-        return {
-            "/new": _handle_new,
-            "/clear": _handle_clear,
-            "/help": _handle_help,
-            "/model": _handle_model,
-            "/preset": _handle_preset,
-            "/conversations": _handle_conversations,
-        }
-
-    def register_slash_command(self, prefix: str, handler: _SlashCommand) -> None:
-        """Register a custom slash command handler.
-
-        ``prefix`` should be the command word including the leading slash
-        (e.g. ``"/ping"``).  ``handler`` receives the remainder of the input
-        after the prefix (may be empty) and must be an async callable.
-        """
-        self._slash_registry[prefix.lower()] = handler
-
-    async def _dispatch_slash_command(self, raw_text: str) -> bool:
-        """Intercept and execute slash commands. Returns True if handled."""
-        input_widget = self.query_one("#message_input", Input)
-        parts = raw_text.split(maxsplit=1)
-        prefix = parts[0].lower()
-        args = parts[1] if len(parts) == 2 else ""
-
-        handler = self._slash_registry.get(prefix)
-        if handler is None:
-            return False
-
-        input_widget.value = ""
-        self._hide_slash_menu()
-        await handler(args)
-        return True
-
-    async def send_user_message(self) -> None:
-        """Collect input text and stream the assistant response into the UI."""
-        input_widget = self.query_one("#message_input", Input)
-        send_button = self.query_one("#send_button", Button)
-        file_button = self.query_one("#file_button", Button)
-        raw_text = input_widget.value.strip()
-
-        # Intercept slash commands before sending to LLM.
-        if raw_text.startswith("/"):
-            if await self._dispatch_slash_command(raw_text):
-                return
-
-        directives = parse_inline_directives(
-            raw_text, vision_enabled=self.capabilities.vision_enabled
-        )
-        user_text = directives.cleaned_text
-        inline_images = directives.image_paths
-        inline_files = directives.file_paths
-
-        # Combine inline images and images attached via the attach button.
-        all_images: list[str] = inline_images + self._attachments.images
-        all_files: list[str] = inline_files + list(self._attachments.files)
-
-        if not user_text and not all_images and not all_files:
-            self.sub_title = "Cannot send an empty message."
+    async def action_interrupt_stream(self) -> None:
+        """Cancel an in-flight assistant response when streaming."""
+        if await self.state.get_state() != ConversationState.STREAMING:
+            self.sub_title = "No response to interrupt."
             return
-
-        # Validate image paths before sending.
-        valid_images: list[str | bytes] = []
-        valid_files: list[str] = []
-        allowed_image_exts = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".bmp",
-            ".webp",
-            ".tiff",
-            ".tif",
-        }
-        for img_path in all_images:
-            ok, message, resolved = _validate_attachment(
-                img_path,
-                kind="image",
-                max_bytes=10 * 1024 * 1024,
-                allowed_extensions=allowed_image_exts,
-                home_only=False,
-            )
-            if ok and resolved is not None:
-                valid_images.append(str(resolved))
-            else:
-                LOGGER.warning(
-                    "app.vision.missing_image",
-                    extra={"event": "app.vision.missing_image", "path": img_path},
-                )
-                self.sub_title = message
-
-        for file_path in all_files:
-            ok, message, resolved = _validate_attachment(
-                file_path,
-                kind="file",
-                max_bytes=2 * 1024 * 1024,
-                allowed_extensions=None,
-                home_only=False,
-            )
-            if ok and resolved is not None:
-                valid_files.append(str(resolved))
-            else:
-                LOGGER.warning(
-                    "app.file.missing",
-                    extra={"event": "app.file.missing", "path": file_path},
-                )
-                self.sub_title = message
-
-        # Atomic CAS: only proceed when IDLE → STREAMING succeeds.
-        # This replaces a separate can_send_message() check, eliminating
-        # the TOCTOU gap between the two lock acquisitions.
-        assistant_bubble: MessageBubble | None = None
-        transitioned = await self.state.transition_if(
-            ConversationState.IDLE, ConversationState.STREAMING
-        )
-        if not transitioned:
-            self.sub_title = "Busy. Wait for current request to finish."
-            return
-        LOGGER.info(
-            "app.state.transition",
-            extra={
-                "event": "app.state.transition",
-                "from_state": "IDLE",
-                "to_state": "STREAMING",
-            },
-        )
-        input_widget.disabled = True
-        send_button.disabled = True
-        file_button.disabled = True
-        try:
-            self.query_one("#activity_bar", ActivityBar).start_activity()
-        except Exception:
-            pass
-        # Clear pending images and files now that we've consumed them.
-        self._attachments.clear()
-        try:
-            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s), {len(valid_files)} file(s)]"
-            self.sub_title = "Sending message..."
-            await self._add_message(
-                content=display_text, role="user", timestamp=self._timestamp()
-            )
-            input_widget.value = ""
-            assistant_bubble = await self._add_message(
-                content="", role="assistant", timestamp=self._timestamp()
-            )
-
-            # Build file context to append to the user prompt for the API call.
-            file_context_parts: list[str] = []
-            for path in valid_files:
-                snippet = ""
-                try:
-                    snippet = Path(path).read_text(encoding="utf-8", errors="ignore")
-                except Exception:
-                    snippet = "<unreadable file>"
-                max_chars = 4000
-                if len(snippet) > max_chars:
-                    snippet = snippet[:max_chars] + "\n... [truncated]"
-                file_context_parts.append(f"[File: {os.path.basename(path)}]\n{snippet}")
-
-            final_user_text = user_text
-            if file_context_parts:
-                file_context = "\n\n".join(file_context_parts)
-                final_user_text = f"{user_text}\n\n{file_context}" if user_text else file_context
-            self._last_prompt = final_user_text
-            self._save_last_prompt(final_user_text)
-            self._hide_slash_menu()
-
-            stream_task = asyncio.create_task(
-                self._stream_assistant_response(
-                    final_user_text,
-                    assistant_bubble,
-                    images=valid_images if valid_images else None,
-                )
-            )
-            self._task_manager.add(stream_task, name="active_stream")
-            try:
-                await stream_task
-            finally:
-                self._task_manager.discard("active_stream")
-            self._set_idle_sub_title("Ready")
-        except asyncio.CancelledError:
-            self.sub_title = "Request cancelled."
-            LOGGER.info(
-                "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
-            )
-            return
-        except OllamaChatError as exc:  # noqa: BLE001
-            msg_tpl, subtitle = _STREAM_ERROR_MESSAGES.get(
-                type(exc),
-                _STREAM_ERROR_MESSAGES[OllamaChatError],
-            )
-            await self._handle_stream_error(
-                assistant_bubble, msg_tpl.format(exc=exc), subtitle
-            )
-        finally:
-            try:
-                self.query_one("#activity_bar", ActivityBar).stop_activity()
-            except Exception:
-                pass
-            input_widget.disabled = False
-            send_button.disabled = False
-            input_widget.focus()
-            if await self.state.get_state() != ConversationState.CANCELLING:
-                await self._transition_state(ConversationState.IDLE)
-            self._update_status_bar()
+        await self._transition_state(ConversationState.CANCELLING)
+        self.sub_title = "Interrupting response..."
+        await self._task_manager.cancel("active_stream")
+        self._set_idle_sub_title(f"Model: {self.chat.model}")
+        self._update_status_bar()
 
     async def action_new_conversation(self) -> None:
         """Clear UI and in-memory conversation history."""
@@ -1757,3 +1536,247 @@ class OllamaChatApp(App[None]):
                 self.sub_title = "Clipboard unavailable. Message placed in input box."
             return
         self.sub_title = "No assistant message available to copy."
+
+    async def send_user_message(self) -> None:
+        """Collect input text and stream the assistant response into the UI."""
+        input_widget = self.query_one("#message_input", Input)
+        send_button = self.query_one("#send_button", Button)
+        file_button = self.query_one("#file_button", Button)
+        raw_text = input_widget.value.strip()
+
+        # Intercept slash commands before sending to LLM.
+        if raw_text.startswith("/"):
+            if await self._dispatch_slash_command(raw_text):
+                return
+
+        directives = parse_inline_directives(
+            raw_text, vision_enabled=self.capabilities.vision_enabled
+        )
+        user_text = directives.cleaned_text
+        inline_images = directives.image_paths
+        inline_files = directives.file_paths
+
+        # Combine inline images and images attached via the attach button.
+        all_images: list[str] = inline_images + self._attachments.images
+        all_files: list[str] = inline_files + list(self._attachments.files)
+
+        if not user_text and not all_images and not all_files:
+            self.sub_title = "Cannot send an empty message."
+            return
+
+        # Validate image paths before sending.
+        valid_images: list[str | bytes] = []
+        valid_files: list[str] = []
+        allowed_image_exts = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".webp",
+            ".tiff",
+            ".tif",
+        }
+        for img_path in all_images:
+            ok, message, resolved = _validate_attachment(
+                img_path,
+                kind="image",
+                max_bytes=10 * 1024 * 1024,
+                allowed_extensions=allowed_image_exts,
+                home_only=False,
+            )
+            if ok and resolved is not None:
+                valid_images.append(str(resolved))
+            else:
+                LOGGER.warning(
+                    "app.vision.missing_image",
+                    extra={"event": "app.vision.missing_image", "path": img_path},
+                )
+                self.sub_title = message
+
+        for file_path in all_files:
+            ok, message, resolved = _validate_attachment(
+                file_path,
+                kind="file",
+                max_bytes=2 * 1024 * 1024,
+                allowed_extensions=None,
+                home_only=False,
+            )
+            if ok and resolved is not None:
+                valid_files.append(str(resolved))
+            else:
+                LOGGER.warning(
+                    "app.file.missing",
+                    extra={"event": "app.file.missing", "path": file_path},
+                )
+                self.sub_title = message
+
+        # Atomic CAS: only proceed when IDLE → STREAMING succeeds.
+        # This replaces a separate can_send_message() check, eliminating
+        # the TOCTOU gap between the two lock acquisitions.
+        assistant_bubble: MessageBubble | None = None
+        transitioned = await self.state.transition_if(
+            ConversationState.IDLE, ConversationState.STREAMING
+        )
+        if not transitioned:
+            self.sub_title = "Busy. Wait for current request to finish."
+            return
+        LOGGER.info(
+            "app.state.transition",
+            extra={
+                "event": "app.state.transition",
+                "from_state": "IDLE",
+                "to_state": "STREAMING",
+            },
+        )
+        input_widget.disabled = True
+        send_button.disabled = True
+        file_button.disabled = True
+        try:
+            self.query_one("#activity_bar", ActivityBar).start_activity()
+        except Exception:
+            pass
+        # Clear pending images and files now that we've consumed them.
+        self._attachments.clear()
+        try:
+            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s), {len(valid_files)} file(s)]"
+            self.sub_title = "Sending message..."
+            await self._add_message(
+                content=display_text, role="user", timestamp=self._timestamp()
+            )
+            input_widget.value = ""
+            assistant_bubble = await self._add_message(
+                content="", role="assistant", timestamp=self._timestamp()
+            )
+
+            # Build file context to append to the user prompt for the API call.
+            file_context_parts: list[str] = []
+            for path in valid_files:
+                snippet = ""
+                try:
+                    snippet = Path(path).read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    snippet = "<unreadable file>"
+                max_chars = 4000
+                if len(snippet) > max_chars:
+                    snippet = snippet[:max_chars] + "\n... [truncated]"
+                file_context_parts.append(f"[File: {os.path.basename(path)}]\n{snippet}")
+
+            final_user_text = user_text
+            if file_context_parts:
+                file_context = "\n\n".join(file_context_parts)
+                final_user_text = f"{user_text}\n\n{file_context}" if user_text else file_context
+            self._last_prompt = final_user_text
+            self._save_last_prompt(final_user_text)
+            self._hide_slash_menu()
+
+            stream_task = asyncio.create_task(
+                self._stream_assistant_response(
+                    final_user_text,
+                    assistant_bubble,
+                    images=valid_images if valid_images else None,
+                )
+            )
+            self._task_manager.add(stream_task, name="active_stream")
+            try:
+                await stream_task
+            finally:
+                self._task_manager.discard("active_stream")
+            self._set_idle_sub_title("Ready")
+        except asyncio.CancelledError:
+            self.sub_title = "Request cancelled."
+            LOGGER.info(
+                "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
+            )
+            return
+        except OllamaChatError as exc:  # noqa: BLE001
+            msg_tpl, subtitle = _STREAM_ERROR_MESSAGES.get(
+                type(exc),
+                _STREAM_ERROR_MESSAGES[OllamaChatError],
+            )
+            await self._handle_stream_error(
+                assistant_bubble, msg_tpl.format(exc=exc), subtitle
+            )
+        finally:
+            try:
+                self.query_one("#activity_bar", ActivityBar).stop_activity()
+            except Exception:
+                pass
+            input_widget.disabled = False
+            send_button.disabled = False
+            input_widget.focus()
+            if await self.state.get_state() != ConversationState.CANCELLING:
+                await self._transition_state(ConversationState.IDLE)
+            self._update_status_bar()
+
+    def _build_slash_registry(self) -> dict[str, _SlashCommand]:
+        """Build the default mapping of slash command prefixes to async handlers."""
+
+        async def _handle_new(_args: str) -> None:
+            await self.action_new_conversation()
+
+        async def _handle_clear(_args: str) -> None:
+            self.sub_title = "Input cleared."
+
+        async def _handle_help(_args: str) -> None:
+            await self.action_command_palette()
+
+        async def _handle_model(args: str) -> None:
+            if args.strip():
+                model_name = args.strip()
+                self._task_manager.add(
+                    asyncio.create_task(self._activate_selected_model(model_name))
+                )
+            else:
+                await self._open_configured_model_picker()
+
+        async def _handle_preset(args: str) -> None:
+            name = args.strip()
+            if not name:
+                await self.action_toggle_prompt_preset_picker()
+                return
+            if name not in self._prompt_presets:
+                self.sub_title = f"Unknown preset: {name}"
+                return
+            self._active_prompt_preset = name
+            preset_value = self._prompt_presets.get(name, "").strip()
+            if preset_value:
+                self.chat.system_prompt = preset_value
+            self.sub_title = f"Prompt preset set: {name}"
+
+        async def _handle_conversations(_args: str) -> None:
+            await self.action_toggle_conversation_picker()
+
+        return {
+            "/new": _handle_new,
+            "/clear": _handle_clear,
+            "/help": _handle_help,
+            "/model": _handle_model,
+            "/preset": _handle_preset,
+            "/conversations": _handle_conversations,
+        }
+
+    def register_slash_command(self, prefix: str, handler: _SlashCommand) -> None:
+        """Register a custom slash command handler.
+
+        ``prefix`` should be the command word including the leading slash
+        (e.g. ``"/ping"``).  ``handler`` receives the remainder of the input
+        after the prefix (may be empty) and must be an async callable.
+        """
+        self._slash_registry[prefix.lower()] = handler
+
+    async def _dispatch_slash_command(self, raw_text: str) -> bool:
+        """Intercept and execute slash commands. Returns True if handled."""
+        input_widget = self.query_one("#message_input", Input)
+        parts = raw_text.split(maxsplit=1)
+        prefix = parts[0].lower()
+        args = parts[1] if len(parts) == 2 else ""
+
+        handler = self._slash_registry.get(prefix)
+        if handler is None:
+            return False
+
+        input_widget.value = ""
+        self._hide_slash_menu()
+        await handler(args)
+        return True

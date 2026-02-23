@@ -194,6 +194,7 @@ class KeybindsConfig(BaseModel):
     export_conversation: str = "ctrl+e"
     search_messages: str = "ctrl+f"
     copy_last_message: str = "ctrl+y"
+    interrupt_stream: str = "escape"
 
     @field_validator("*", mode="before")
     @classmethod

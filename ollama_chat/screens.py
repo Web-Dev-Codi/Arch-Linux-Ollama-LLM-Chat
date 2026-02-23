@@ -113,6 +113,60 @@ class SimplePickerScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
 
+class ImageAttachScreen(ModalScreen[str | None]):
+    """Fallback modal for collecting an image path when native dialog is unavailable."""
+
+    CSS = """
+    ImageAttachScreen {
+        align: center middle;
+    }
+
+    #image-attach-dialog {
+        width: 60;
+        padding: 1 3;
+        border: round $panel;
+        background: $surface;
+    }
+
+    #image-attach-title {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    #image-attach-input {
+        width: 100%;
+        margin: 1 0;
+    }
+
+    #image-attach-help {
+        padding-top: 1;
+        text-align: center;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Container(id="image-attach-dialog"):
+            yield Static("Attach image", id="image-attach-title")
+            yield Input(
+                placeholder="Enter absolute or relative image path...",
+                id="image-attach-input",
+            )
+            yield Static("Enter to confirm  |  Esc to cancel", id="image-attach-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#image-attach-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "image-attach-input":
+            return
+        value = event.value.strip()
+        self.dismiss(value if value else None)
+
+    def on_key(self, event: Any) -> None:  # noqa: ANN401
+        if str(getattr(event, "key", "")).lower() == "escape":
+            self.dismiss(None)
+
+
 class TextPromptScreen(ModalScreen[str | None]):
     """Modal screen to prompt for a single line of text."""
 
