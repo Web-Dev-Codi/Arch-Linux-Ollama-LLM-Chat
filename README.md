@@ -1,11 +1,11 @@
-# Ollama Chat TUI
+# OllamaTerm
 
 > **A keyboard-first, fully local AI chat interface for the terminal.**  
 > Powered by [Ollama](https://ollama.com/) and [Textual](https://github.com/Textualize/textual) — no cloud, no API keys, no data leaving your machine.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Ollama Chat                        [llama3.2] ● Online │
+│  OllamaTerm                         [llama3.2] ● Online │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  You  ────────────────────────────────────────────────  │
@@ -26,9 +26,9 @@
 
 ## Table of Contents
 
-- [Ollama Chat TUI](#ollama-chat-tui)
+- [Ollama Chat TUI](#ollamaterm-tui)
   - [Table of Contents](#table-of-contents)
-  - [Why Ollama Chat TUI?](#why-ollama-chat-tui)
+  - [Why Ollama Chat TUI?](#why-ollamaterm-tui)
   - [Features](#features)
     - [Core Chat](#core-chat)
     - [Model Management](#model-management)
@@ -62,9 +62,9 @@
 
 ---
 
-## Why Ollama Chat TUI?
+## Why OllamaTerm?
 
-| | Ollama Chat TUI | Web-based chat UIs |
+| | OllamaTerm | Web-based chat UIs |
 |---|---|---|
 | **Privacy** | 100% local — data never leaves your machine | Depends on provider |
 | **Offline use** | Works after initial model pull | Requires internet |
@@ -168,14 +168,14 @@ ollama pull llama3.2
 **2. (Optional) Copy the example config**
 
 ```bash
-mkdir -p ~/.config/ollama-chat
-cp config.example.toml ~/.config/ollama-chat/config.toml
+mkdir -p ~/.config/ollamaterm
+cp config.example.toml ~/.config/ollamaterm/config.toml
 ```
 
 **3. Launch the app**
 
 ```bash
-ollama-chat
+ollamaterm
 # or
 python -m ollama_chat
 ```
@@ -199,7 +199,7 @@ python -m ollama_chat
 ### Config File Location
 
 ```
-~/.config/ollama-chat/config.toml
+~/.config/ollamaterm/config.toml
 ```
 
 If the file does not exist, built-in defaults are used automatically.  
@@ -212,7 +212,7 @@ Use `config.example.toml` from the repo as your starting point.
 # Window title shown in the TUI header
 title = "Ollama Chat"
 # WM window class set on startup (useful for Hyprland/i3 rules)
-class = "ollama-chat-tui"
+class = "ollamaterm-tui"
 # How often (seconds) to check Ollama connectivity
 connection_check_interval_seconds = 15
 
@@ -267,12 +267,12 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 level = "INFO"          # DEBUG | INFO | WARNING | ERROR
 structured = true       # JSON-formatted log lines
 log_to_file = false
-log_file_path = "~/.local/state/ollama-chat/app.log"
+log_file_path = "~/.local/state/ollamaterm/app.log"
 
 [persistence]
 enabled = false
-directory = "~/.local/state/ollama-chat/conversations"
-metadata_path = "~/.local/state/ollama-chat/conversations/index.json"
+directory = "~/.local/state/ollamaterm/conversations"
+metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
 [capabilities]
 # Chain-of-thought reasoning (models: qwen3, deepseek-r1, deepseek-v3.1)
@@ -349,30 +349,30 @@ For the most reliable behavior on Wayland, also pass the class directly to
 your terminal:
 
 ```bash
-ghostty --class=ollama-chat-tui -e ollama-chat
+ghostty --class=ollamaterm-tui -e ollamaterm
 ```
 
 Suggested Hyprland window rules (`~/.config/hypr/hyprland.conf`):
 
 ```conf
-windowrulev2 = float,          class:^(ollama-chat-tui)$
-windowrulev2 = size 1200 800,  class:^(ollama-chat-tui)$
-windowrulev2 = center,         class:^(ollama-chat-tui)$
-windowrulev2 = opacity 0.95,   class:^(ollama-chat-tui)$
+windowrulev2 = float,          class:^(ollamaterm-tui)$
+windowrulev2 = size 1200 800,  class:^(ollamaterm-tui)$
+windowrulev2 = center,         class:^(ollamaterm-tui)$
+windowrulev2 = opacity 0.95,   class:^(ollamaterm-tui)$
 
-bind = $mainMod, O, exec, ghostty --class=ollama-chat-tui -e ollama-chat
+bind = $mainMod, O, exec, ghostty --class=ollamaterm-tui -e ollamaterm
 ```
 
 ### Desktop Entry
 
-Create `~/.local/share/applications/ollama-chat.desktop`:
+Create `~/.local/share/applications/ollamaterm.desktop`:
 
 ```desktop
 [Desktop Entry]
 Type=Application
-Name=Ollama Chat
+Name=OllamaTerm
 Comment=ChatGPT-style TUI for Ollama local LLMs
-Exec=ghostty --class=ollama-chat-tui -e ollama-chat
+Exec=ghostty --class=ollamaterm-tui -e ollamaterm
 Icon=utilities-terminal
 Terminal=false
 Categories=Utility;TerminalEmulator;Development;
@@ -450,7 +450,7 @@ ruff check . && black --check . && mypy ollama_chat/ && pytest -q
 | Empty or cut-off response | Check `ollama list` to confirm the model name; review Ollama logs |
 | Keybind not responding | Verify the syntax in `[keybinds]` and restart the app |
 | Colors not applied | Use valid hex format: `#RRGGBB` or `#RGB` |
-| Window class rule not matching | Ensure `app.class` is set; prefer launching with `ghostty --class=ollama-chat-tui` |
+| Window class rule not matching | Ensure `app.class` is set; prefer launching with `ghostty --class=ollamaterm-tui` |
 | Tool loop not stopping | Lower `max_tool_iterations` in `[capabilities]` |
 
 ---

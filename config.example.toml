@@ -1,6 +1,6 @@
 [app]
-title = "Ollama Chat"
-class = "ollama-chat-tui"
+title = "OllamaTerm"
+class = "ollamaterm"
 connection_check_interval_seconds = 15
 
 [ollama]

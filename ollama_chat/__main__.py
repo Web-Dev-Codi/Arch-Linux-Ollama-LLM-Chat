@@ -1,4 +1,4 @@
-"""CLI entrypoint for ollama-chat."""
+"""CLI entrypoint for OllamaTerm."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from .config import ensure_config_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ollama-chat", description="Ollama Chat TUI")
+    parser = argparse.ArgumentParser(prog="ollamaterm", description="OllamaTerm - Terminal chat interface for local Ollama models")
     parser.add_argument(
         "--version",
         action="store_true",
@@ -28,10 +28,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if args.version:
         try:
-            version = metadata.version("ollama-chat-tui")
+            version = metadata.version("ollamaterm")
         except metadata.PackageNotFoundError:
             version = "0.0.0"
-        print(f"ollama-chat {version}")
+        print(f"ollamaterm {version}")
         return
 
     ensure_config_dir()
