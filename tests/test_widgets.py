@@ -96,56 +96,93 @@ class MessageBubbleTests(unittest.TestCase):
 
 
 @unittest.skipIf(InputBox is None, "textual is not installed")
-class InputBoxTests(unittest.TestCase):
+class InputBoxTests(unittest.IsolatedAsyncioTestCase):
     """Validate InputBox composition."""
 
-    def test_input_box_is_vertical(self) -> None:
+    async def test_input_box_is_vertical(self) -> None:
         from textual.containers import Vertical
 
         assert InputBox is not None
         self.assertTrue(issubclass(InputBox, Vertical))
 
-    def test_compose_yields_input_and_buttons(self) -> None:
+    async def test_compose_yields_input_and_buttons(self) -> None:
         assert InputBox is not None
         assert Input is not None
         assert Button is not None
-        box = InputBox()
-        children = list(box.compose())
-        widget_types = [type(w) for w in children]
-        self.assertIn(Input, widget_types)
-        self.assertIn(Button, widget_types)
 
-    def test_input_has_correct_id(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield InputBox(id="ib")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#message_input", Input)
+            app.query_one("#send_button", Button)
+
+    async def test_input_has_correct_id(self) -> None:
         assert InputBox is not None
-        box = InputBox()
-        inputs = [w for w in box.compose() if isinstance(w, Input)]
-        self.assertEqual(len(inputs), 1)
-        self.assertEqual(inputs[0].id, "message_input")
 
-    def test_button_has_correct_id(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield InputBox(id="ib")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            input_widget = app.query_one("#message_input", Input)
+            self.assertEqual(input_widget.id, "message_input")
+
+    async def test_button_has_correct_id(self) -> None:
         assert InputBox is not None
-        box = InputBox()
-        buttons = [w for w in box.compose() if isinstance(w, Button)]
-        send_buttons = [b for b in buttons if b.id == "send_button"]
-        self.assertEqual(len(send_buttons), 1)
 
-    def test_attach_and_file_buttons_present(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield InputBox(id="ib")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            button = app.query_one("#send_button", Button)
+            self.assertEqual(button.id, "send_button")
+
+    async def test_attach_and_file_buttons_present(self) -> None:
         assert InputBox is not None
-        box = InputBox()
-        buttons = [w for w in box.compose() if isinstance(w, Button)]
-        attach_buttons = [b for b in buttons if b.id == "attach_button"]
-        self.assertEqual(len(attach_buttons), 1)
-        file_buttons = [b for b in buttons if b.id == "file_button"]
-        self.assertEqual(len(file_buttons), 1)
 
-    def test_slash_menu_present(self) -> None:
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield InputBox(id="ib")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#attach_button", Button)
+            app.query_one("#file_button", Button)
+
+    async def test_slash_menu_present(self) -> None:
         from textual.widgets import OptionList
 
         assert InputBox is not None
-        box = InputBox()
-        option_lists = [w for w in box.compose() if isinstance(w, OptionList)]
-        self.assertEqual(len(option_lists), 1)
-        self.assertEqual(option_lists[0].id, "slash_menu")
+
+        from textual.app import App, ComposeResult
+
+        class _TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield InputBox(id="ib")
+
+        app = _TestApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            menu = app.query_one("#slash_menu", OptionList)
+            self.assertEqual(menu.id, "slash_menu")
 
 
 @unittest.skipIf(StatusBar is None, "textual is not installed")
@@ -354,7 +391,7 @@ class CodeBlockWidgetTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(ActivityBar is None, "textual is not installed")
 class ActivityBarTests(unittest.IsolatedAsyncioTestCase):
-    """Validate ActivityBar composition and start/stop behaviour."""
+    """Validate ActivityBar animation state changes."""
 
     def test_activity_bar_is_static_subclass(self) -> None:
         from textual.widgets import Static
@@ -414,7 +451,7 @@ class ActivityBarTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ab._running)
             ab.stop_activity()
             self.assertFalse(ab._running)
-            self.assertIsNone(ab._animation_task)
+            self.assertIsNone(ab._animation_timer)
 
 
 if __name__ == "__main__":

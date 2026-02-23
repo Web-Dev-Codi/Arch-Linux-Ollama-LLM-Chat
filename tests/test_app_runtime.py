@@ -31,7 +31,7 @@ class _RuntimeFakePersistence:
         self.exported = False
 
     def save_conversation(
-        self, messages: list[dict[str, str]], model: str
+        self, messages: list[dict[str, str]], model: str, name: str = ""
     ) -> str:  # noqa: ARG002
         self.saved = True
         return "/tmp/runtime-save.json"
@@ -127,6 +127,10 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
         app.config["app"]["connection_check_interval_seconds"] = 999
         app._copied_text = ""
         app.copy_to_clipboard = lambda value: setattr(app, "_copied_text", value)  # type: ignore[method-assign]
+        async def _no_prompt() -> str:
+            return ""
+
+        app._prompt_conversation_name = _no_prompt  # type: ignore[method-assign]
         return app
 
     async def test_happy_path_actions(self) -> None:
@@ -205,10 +209,14 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_parse_file_prefixes(self) -> None:
         app = self._build_app()
-        cleaned, paths = app._parse_file_prefixes("/file ~/notes.txt and more /file /tmp/x")
-        self.assertTrue(cleaned.startswith("and more"))
-        self.assertIn(os.path.expanduser("~/notes.txt"), paths)
-        self.assertIn("/tmp/x", paths)
+        from ollama_chat.commands import parse_inline_directives
+
+        directives = parse_inline_directives(
+            "/file ~/notes.txt and more /file /tmp/x", vision_enabled=False
+        )
+        self.assertTrue(directives.cleaned_text.startswith("and more"))
+        self.assertIn(os.path.expanduser("~/notes.txt"), directives.file_paths)
+        self.assertIn("/tmp/x", directives.file_paths)
 
     async def test_extract_paths_from_paste(self) -> None:
         app = self._build_app()

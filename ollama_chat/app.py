@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -25,6 +26,7 @@ from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
 from .chat import OllamaChat
+from .commands import parse_inline_directives
 from .config import load_config
 from .exceptions import (
     OllamaChatError,
@@ -35,6 +37,12 @@ from .exceptions import (
 )
 from .logging_utils import configure_logging
 from .persistence import ConversationPersistence
+from .screens import (
+    ConversationPickerScreen,
+    InfoScreen,
+    SimplePickerScreen,
+    TextPromptScreen,
+)
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
@@ -63,10 +71,6 @@ _STREAM_ERROR_MESSAGES: dict[type, tuple[str, str]] = {
 
 _SlashCommand = Callable[[str], Awaitable[None]]
 
-# Pattern matching /image <path> and /file <path> prefixes anywhere in the input text.
-_IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
-_FILE_PREFIX_RE = re.compile(r"(?:^|\s)/file\s+(\S+)")
-
 
 async def _open_native_file_dialog(
     title: str = "Open File",
@@ -82,7 +86,7 @@ async def _open_native_file_dialog(
     gdbus_bin = shutil.which("gdbus")
     if gdbus_bin is not None:
         try:
-            handle_token = f"ollama_chat_{os.getpid()}"
+            handle_token = f"ollamaterm_{os.getpid()}"
             proc = await asyncio.create_subprocess_exec(
                 gdbus_bin,
                 "call",
@@ -158,6 +162,53 @@ async def _open_native_file_dialog(
     return None
 
 
+def _is_regular_file(path: Path) -> bool:
+    try:
+        return path.is_file() and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def _is_within_home(path: Path) -> bool:
+    try:
+        home = Path.home().resolve(strict=False)
+        resolved = path.resolve(strict=False)
+        resolved.relative_to(home)
+        return True
+    except Exception:
+        return False
+
+
+def _validate_attachment(
+    raw_path: str,
+    *,
+    kind: str,
+    max_bytes: int,
+    allowed_extensions: set[str] | None = None,
+    home_only: bool = False,
+) -> tuple[bool, str, Path | None]:
+    expanded = Path(os.path.expanduser(raw_path))
+    if not _is_regular_file(expanded):
+        return False, f"{kind.capitalize()} not found: {expanded}", None
+    if home_only and not _is_within_home(expanded):
+        return False, f"{kind.capitalize()} must be inside your home directory.", None
+    if allowed_extensions is not None:
+        ext = expanded.suffix.lower()
+        if ext not in allowed_extensions:
+            return False, f"Unsupported {kind} type: {ext}", None
+    try:
+        size = expanded.stat().st_size
+    except OSError:
+        return False, f"Unable to read {kind} size.", None
+    if size > max_bytes:
+        return (
+            False,
+            f"{kind.capitalize()} too large ({size} bytes). Max is {max_bytes} bytes.",
+            None,
+        )
+    return True, str(expanded), expanded
+
+
 class ModelPickerScreen(ModalScreen[str | None]):
     """Modal picker for selecting a configured Ollama model."""
 
@@ -218,61 +269,6 @@ class ModelPickerScreen(ModalScreen[str | None]):
             selected_index = -1
         if 0 <= selected_index < len(self.models):
             self.dismiss(self.models[selected_index])
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class ImageAttachScreen(ModalScreen[str | None]):
-    """Modal dialog for entering an image file path to attach."""
-
-    CSS = """
-    ImageAttachScreen {
-        align: center middle;
-    }
-
-    #image-attach-dialog {
-        width: 60;
-        height: auto;
-        padding: 1 2;
-        border: round $panel;
-        background: $surface;
-    }
-
-    #image-attach-title {
-        padding-bottom: 1;
-        text-style: bold;
-    }
-
-    #image-attach-input {
-        width: 100%;
-        margin-bottom: 1;
-    }
-
-    #image-attach-help {
-        padding-top: 1;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def compose(self) -> ComposeResult:
-        with Container(id="image-attach-dialog"):
-            yield Static("Attach image", id="image-attach-title")
-            yield Input(
-                placeholder="Enter absolute or relative image path...",
-                id="image-attach-input",
-            )
-            yield Static("Enter to confirm  |  Esc to cancel", id="image-attach-help")
-
-    def on_mount(self) -> None:
-        self.query_one("#image-attach-input", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "image-attach-input":
-            path = event.value.strip()
-            self.dismiss(path if path else None)
-
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -394,6 +390,8 @@ class OllamaChatApp(App[None]):
         "export_conversation": "Export",
         "search_messages": "Search",
         "copy_last_message": "Copy Last",
+        "toggle_conversation_picker": "Conversations",
+        "toggle_prompt_preset_picker": "Prompt",
     }
 
     KEY_TO_ACTION: dict[str, str] = {
@@ -409,6 +407,8 @@ class OllamaChatApp(App[None]):
         "export_conversation": "export_conversation",
         "search_messages": "search_messages",
         "copy_last_message": "copy_last_message",
+        "toggle_conversation_picker": "toggle_conversation_picker",
+        "toggle_prompt_preset_picker": "toggle_prompt_preset_picker",
     }
 
     RESPONSE_PLACEHOLDER_FRAMES: tuple[str, ...] = (
@@ -433,6 +433,26 @@ class OllamaChatApp(App[None]):
             },
         )
 
+        # Enforce host policy defensively (config already validates, but keep
+        # the boundary explicit here).
+        security_cfg = self.config.get("security", {})
+        host_value = str(self.config["ollama"]["host"])
+        parsed = urlparse(host_value)
+        hostname = (parsed.hostname or "").strip().lower()
+        scheme = parsed.scheme.lower()
+        allowed_hosts = {
+            str(item).strip().lower()
+            for item in security_cfg.get("allowed_hosts", [])
+            if str(item).strip()
+        }
+        if scheme not in {"http", "https"} or not hostname:
+            raise OllamaConnectionError("ollama.host must use http(s) and include a hostname.")
+        if not bool(security_cfg.get("allow_remote_hosts", False)) and hostname not in allowed_hosts:
+            raise OllamaConnectionError(
+                "ollama.host is not allowed by security policy. "
+                "Set security.allow_remote_hosts=true or add the hostname to security.allowed_hosts."
+            )
+
         ollama_cfg = self.config["ollama"]
         configured_default_model = str(ollama_cfg["model"])
         self._configured_models = self._normalize_configured_models(
@@ -447,6 +467,8 @@ class OllamaChatApp(App[None]):
             max_history_messages=int(ollama_cfg["max_history_messages"]),
             max_context_tokens=int(ollama_cfg["max_context_tokens"]),
         )
+        self._prompt_presets: dict[str, str] = dict(ollama_cfg.get("prompt_presets") or {})
+        self._active_prompt_preset: str = str(ollama_cfg.get("active_prompt_preset") or "").strip()
         self.state = StateManager()
         self._task_manager = TaskManager()
         self._connection_state = ConnectionState.UNKNOWN
@@ -461,6 +483,8 @@ class OllamaChatApp(App[None]):
             ("/clear", "Clear the input"),
             ("/help", "Show help"),
             ("/model <name>", "Switch active model"),
+            ("/preset <name>", "Switch prompt preset"),
+            ("/conversations", "Open conversation picker"),
         ]
 
         # Capabilities configuration.
@@ -635,6 +659,87 @@ class OllamaChatApp(App[None]):
                 id="activity_bar",
             )
         yield Footer()
+
+    async def action_command_palette(self) -> None:
+        """Open a lightweight command palette (help) listing available actions."""
+        lines = ["Commands:", ""]
+        for cmd, desc in self._slash_commands:
+            lines.append(f"{cmd} - {desc}")
+        lines.append("")
+        lines.append("Keybind actions:")
+        for binding in self._binding_specs:
+            lines.append(f"{binding.key.upper()} - {binding.description} ({binding.action})")
+        await self.push_screen(InfoScreen("\n".join(lines)))
+
+    async def action_toggle_conversation_picker(self) -> None:
+        """Open conversation quick switcher."""
+        if await self.state.get_state() != ConversationState.IDLE:
+            self.sub_title = "Conversation picker is available only when idle."
+            return
+        if not self.persistence.enabled:
+            self.sub_title = "Persistence is disabled in configuration."
+            return
+        items = self.persistence.list_conversations()
+        if not items:
+            self.sub_title = "No saved conversations found."
+            return
+        selected = await self.push_screen_wait(ConversationPickerScreen(items))
+        if not selected:
+            return
+        await self._load_conversation_from_path(Path(selected))
+
+    async def action_toggle_prompt_preset_picker(self) -> None:
+        """Open prompt preset picker and apply selection."""
+        if await self.state.get_state() != ConversationState.IDLE:
+            self.sub_title = "Prompt picker is available only when idle."
+            return
+        if not self._prompt_presets:
+            self.sub_title = "No prompt presets configured."
+            return
+        options = sorted(self._prompt_presets.keys())
+        selected = await self.push_screen_wait(SimplePickerScreen("Prompt Presets", options))
+        if not selected:
+            return
+        self._active_prompt_preset = selected
+        preset_value = self._prompt_presets.get(selected, "").strip()
+        if preset_value:
+            self.chat.system_prompt = preset_value
+            self.chat.message_store = self.chat.message_store.__class__(
+                system_prompt=preset_value,
+                max_history_messages=self.chat.message_store.max_history_messages,
+                max_context_tokens=self.chat.message_store.max_context_tokens,
+            )
+        self.sub_title = f"Prompt preset set: {selected}"
+
+    async def _load_conversation_from_path(self, path: Path) -> None:
+        try:
+            payload = self.persistence.load_conversation(path)
+        except Exception:
+            self.sub_title = "Failed to load conversation."
+            return
+        messages = payload.get("messages", [])
+        model = payload.get("model", self.chat.model)
+        if not isinstance(messages, list):
+            self.sub_title = "Saved conversation format is invalid."
+            return
+        self.chat.load_history(messages)  # type: ignore[arg-type]
+        if isinstance(model, str) and model.strip():
+            self.chat.set_model(model.strip())
+        await self._clear_conversation_view()
+        await self._render_messages_from_history(self.chat.messages)
+        self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
+        self._update_status_bar()
+
+    async def _prompt_conversation_name(self) -> str:
+        try:
+            value = await self.push_screen_wait(
+                TextPromptScreen("Conversation name", placeholder="(optional)")
+            )
+        except Exception:
+            return ""
+        if value is None:
+            return ""
+        return str(value).strip()
 
     async def on_mount(self) -> None:
         """Apply theme and register runtime keybindings."""
@@ -937,22 +1042,47 @@ class OllamaChatApp(App[None]):
     def _on_image_attach_dismissed(self, path: str | None) -> None:
         if not path:
             return
-        expanded = os.path.expanduser(path)
-        if not os.path.isfile(expanded):
-            self.sub_title = f"Image not found: {expanded}"
+        ok, message, resolved = _validate_attachment(
+            path,
+            kind="image",
+            max_bytes=10 * 1024 * 1024,
+            allowed_extensions={
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".bmp",
+                ".webp",
+                ".tiff",
+                ".tif",
+            },
+            home_only=False,
+        )
+        if not ok or resolved is None:
+            self.sub_title = message
             return
-        self._attachments.add_image(expanded)
-        self.sub_title = f"Image attached: {os.path.basename(expanded)} ({len(self._attachments.images)} total)"
+        self._attachments.add_image(str(resolved))
+        self.sub_title = (
+            f"Image attached: {resolved.name} ({len(self._attachments.images)} total)"
+        )
 
     def _on_file_attach_dismissed(self, path: str | None) -> None:
         if not path:
             return
-        expanded = os.path.expanduser(path)
-        if not os.path.isfile(expanded):
-            self.sub_title = f"File not found: {expanded}"
+        ok, message, resolved = _validate_attachment(
+            path,
+            kind="file",
+            max_bytes=2 * 1024 * 1024,
+            allowed_extensions=None,
+            home_only=False,
+        )
+        if not ok or resolved is None:
+            self.sub_title = message
             return
-        self._attachments.add_file(expanded)
-        self.sub_title = f"File attached: {os.path.basename(expanded)} ({len(self._attachments.files)} total)"
+        self._attachments.add_file(str(resolved))
+        self.sub_title = (
+            f"File attached: {resolved.name} ({len(self._attachments.files)} total)"
+        )
 
     @staticmethod
     def _is_image_path(path: str) -> bool:
@@ -1146,34 +1276,6 @@ class OllamaChatApp(App[None]):
         finally:
             await self._stop_response_indicator_task()
 
-    @staticmethod
-    def _parse_image_prefixes(text: str) -> tuple[str, list[str]]:
-        """Extract /image <path> directives from input text.
-
-        Returns (cleaned_text, [image_paths]).
-        """
-        paths: list[str] = []
-        matches = _IMAGE_PREFIX_RE.findall(text)
-        for path in matches:
-            expanded = os.path.expanduser(path)
-            paths.append(expanded)
-        cleaned = _IMAGE_PREFIX_RE.sub("", text).strip()
-        return cleaned, paths
-
-    @staticmethod
-    def _parse_file_prefixes(text: str) -> tuple[str, list[str]]:
-        """Extract /file <path> directives from input text.
-
-        Returns (cleaned_text, [file_paths]).
-        """
-        paths: list[str] = []
-        matches = _FILE_PREFIX_RE.findall(text)
-        for path in matches:
-            expanded = os.path.expanduser(path)
-            paths.append(expanded)
-        cleaned = _FILE_PREFIX_RE.sub("", text).strip()
-        return cleaned, paths
-
     async def _handle_stream_error(
         self,
         bubble: MessageBubble | None,
@@ -1211,11 +1313,30 @@ class OllamaChatApp(App[None]):
             else:
                 await self._open_configured_model_picker()
 
+        async def _handle_preset(args: str) -> None:
+            name = args.strip()
+            if not name:
+                await self.action_toggle_prompt_preset_picker()
+                return
+            if name not in self._prompt_presets:
+                self.sub_title = f"Unknown preset: {name}"
+                return
+            self._active_prompt_preset = name
+            preset_value = self._prompt_presets.get(name, "").strip()
+            if preset_value:
+                self.chat.system_prompt = preset_value
+            self.sub_title = f"Prompt preset set: {name}"
+
+        async def _handle_conversations(_args: str) -> None:
+            await self.action_toggle_conversation_picker()
+
         return {
             "/new": _handle_new,
             "/clear": _handle_clear,
             "/help": _handle_help,
             "/model": _handle_model,
+            "/preset": _handle_preset,
+            "/conversations": _handle_conversations,
         }
 
     def register_slash_command(self, prefix: str, handler: _SlashCommand) -> None:
@@ -1255,15 +1376,12 @@ class OllamaChatApp(App[None]):
             if await self._dispatch_slash_command(raw_text):
                 return
 
-        # Parse /image <path> prefixes from text (vision capability).
-        inline_images: list[str] = []
-        user_text = raw_text
-        if self.capabilities.vision_enabled:
-            user_text, inline_images = self._parse_image_prefixes(raw_text)
-
-        # Parse /file <path> prefixes from text.
-        inline_files: list[str] = []
-        user_text, inline_files = self._parse_file_prefixes(user_text)
+        directives = parse_inline_directives(
+            raw_text, vision_enabled=self.capabilities.vision_enabled
+        )
+        user_text = directives.cleaned_text
+        inline_images = directives.image_paths
+        inline_files = directives.file_paths
 
         # Combine inline images and images attached via the attach button.
         all_images: list[str] = inline_images + self._attachments.images
@@ -1276,25 +1394,49 @@ class OllamaChatApp(App[None]):
         # Validate image paths before sending.
         valid_images: list[str | bytes] = []
         valid_files: list[str] = []
+        allowed_image_exts = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".webp",
+            ".tiff",
+            ".tif",
+        }
         for img_path in all_images:
-            if os.path.isfile(img_path):
-                valid_images.append(img_path)
+            ok, message, resolved = _validate_attachment(
+                img_path,
+                kind="image",
+                max_bytes=10 * 1024 * 1024,
+                allowed_extensions=allowed_image_exts,
+                home_only=False,
+            )
+            if ok and resolved is not None:
+                valid_images.append(str(resolved))
             else:
                 LOGGER.warning(
                     "app.vision.missing_image",
                     extra={"event": "app.vision.missing_image", "path": img_path},
                 )
-                self.sub_title = f"Image not found, skipping: {img_path}"
+                self.sub_title = message
 
         for file_path in all_files:
-            if os.path.isfile(file_path):
-                valid_files.append(file_path)
+            ok, message, resolved = _validate_attachment(
+                file_path,
+                kind="file",
+                max_bytes=2 * 1024 * 1024,
+                allowed_extensions=None,
+                home_only=False,
+            )
+            if ok and resolved is not None:
+                valid_files.append(str(resolved))
             else:
                 LOGGER.warning(
                     "app.file.missing",
                     extra={"event": "app.file.missing", "path": file_path},
                 )
-                self.sub_title = f"File not found, skipping: {file_path}"
+                self.sub_title = message
 
         # Atomic CAS: only proceed when IDLE → STREAMING succeeds.
         # This replaces a separate can_send_message() check, eliminating
@@ -1497,8 +1639,9 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Persistence is disabled in configuration."
             return
         try:
+            name = await self._prompt_conversation_name()
             path = self.persistence.save_conversation(
-                self.chat.messages, self.chat.model
+                self.chat.messages, self.chat.model, name=name
             )
             self.sub_title = f"Conversation saved: {path}"
         except Exception:

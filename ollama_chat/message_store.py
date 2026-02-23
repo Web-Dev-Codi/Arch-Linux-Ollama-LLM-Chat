@@ -22,14 +22,25 @@ class MessageStore:
         self._base_messages: list[Message] = []
         if system_prompt.strip():
             self._base_messages.append(
-                {"role": "system", "content": system_prompt.strip()}
+                {
+                    "role": "system",
+                    "content": system_prompt.strip(),
+                    "_token_estimate": str(
+                        self._estimate_tokens_for_parts("system", system_prompt.strip())
+                    ),
+                }
             )
         self._messages: list[Message] = list(self._base_messages)
 
     @property
     def messages(self) -> list[Message]:
         """Return a shallow copy of all stored messages."""
-        return [dict(message) for message in self._messages]
+        cleaned: list[Message] = []
+        for message in self._messages:
+            payload = dict(message)
+            payload.pop("_token_estimate", None)
+            cleaned.append(payload)
+        return cleaned
 
     @property
     def message_count(self) -> int:
@@ -47,7 +58,15 @@ class MessageStore:
             role = str(message.get("role", "")).strip().lower()
             content = str(message.get("content", "")).strip()
             if role:
-                normalized_messages.append({"role": role, "content": content})
+                normalized_messages.append(
+                    {
+                        "role": role,
+                        "content": content,
+                        "_token_estimate": str(
+                            self._estimate_tokens_for_parts(role, content)
+                        ),
+                    }
+                )
 
         if not normalized_messages:
             self.clear()
@@ -68,16 +87,33 @@ class MessageStore:
         normalized_content = content.strip()
         if not normalized_role:
             return
-        self._messages.append({"role": normalized_role, "content": normalized_content})
+        self._messages.append(
+            {
+                "role": normalized_role,
+                "content": normalized_content,
+                "_token_estimate": str(
+                    self._estimate_tokens_for_parts(normalized_role, normalized_content)
+                ),
+            }
+        )
         self._trim_by_history_limit()
 
     @staticmethod
-    def _message_tokens(message: Message) -> int:
-        """Estimate token cost for a single message."""
-        role = message.get("role", "")
-        content = message.get("content", "")
+    def _estimate_tokens_for_parts(role: str, content: str) -> int:
+        """Estimate token cost for a single message from role/content."""
         role_cost = 2 if role else 0
         return role_cost + len(content) // 4 + len(content.split()) + 2
+
+    @classmethod
+    def _message_tokens(cls, message: Message) -> int:
+        cached = message.get("_token_estimate")
+        if isinstance(cached, str) and cached.isdigit():
+            return int(cached)
+        role = message.get("role", "")
+        content = message.get("content", "")
+        estimate = cls._estimate_tokens_for_parts(str(role), str(content))
+        message["_token_estimate"] = str(estimate)
+        return estimate
 
     def estimated_tokens(self, messages: Iterable[Message] | None = None) -> int:
         """Estimate token count deterministically from message text."""

@@ -17,7 +17,7 @@ class MainEntrypointTests(unittest.TestCase):
             patch("ollama_chat.__main__.OllamaChatApp") as app_cls_mock,
         ):
             app_instance = app_cls_mock.return_value
-            main()
+            main([])
             ensure_mock.assert_called_once()
             app_cls_mock.assert_called_once()
             app_instance.run.assert_called_once()

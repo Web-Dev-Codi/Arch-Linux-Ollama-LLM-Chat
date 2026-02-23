@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 import unittest
 
-from ollama_chat.persistence import ConversationPersistence
+from ollama_chat.persistence import (
+    ConversationPersistence,
+    PersistenceDisabledError,
+    PersistenceFormatError,
+)
 
 
 def _make_persistence(base: Path) -> ConversationPersistence:
@@ -93,13 +97,13 @@ class PersistenceTests(unittest.TestCase):
             self.assertIsNone(result)
 
     def test_load_conversation_raises_on_invalid_payload(self) -> None:
-        """load_conversation() raises RuntimeError if payload is not a dict."""
+        """load_conversation() raises PersistenceFormatError if payload is not a dict."""
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
             persistence = _make_persistence(base)
             bad_file = base / "bad.json"
             bad_file.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(PersistenceFormatError):
                 persistence.load_conversation(bad_file)
 
     def test_save_raises_when_disabled(self) -> None:
@@ -110,7 +114,7 @@ class PersistenceTests(unittest.TestCase):
                 directory=str(base / "conversations"),
                 metadata_path=str(base / "conversations" / "index.json"),
             )
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(PersistenceDisabledError):
                 persistence.save_conversation([{"role": "user", "content": "hi"}], "m")
 
     def test_export_raises_when_disabled(self) -> None:
@@ -121,8 +125,29 @@ class PersistenceTests(unittest.TestCase):
                 directory=str(base / "conversations"),
                 metadata_path=str(base / "conversations" / "index.json"),
             )
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(PersistenceDisabledError):
                 persistence.export_markdown([{"role": "user", "content": "hi"}], "m")
+
+    def test_load_latest_ignores_index_paths_outside_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            persistence = _make_persistence(base)
+            persistence._ensure_paths()
+            # Index points outside persistence.directory; should be ignored.
+            outside = base / "outside.json"
+            outside.write_text(json.dumps({"messages": []}), encoding="utf-8")
+            persistence.metadata_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "path": str(outside),
+                            "created_at": "2099-01-01T00:00:00+00:00",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.assertIsNone(persistence.load_latest_conversation())
 
     def test_save_multiple_and_list_count(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

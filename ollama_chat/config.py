@@ -25,8 +25,11 @@ import tomllib  # stdlib since Python 3.11 (project requires >=3.11)
 
 LOGGER = logging.getLogger(__name__)
 
-CONFIG_DIR = Path.home() / ".config" / "ollama-chat"
+CONFIG_DIR = Path.home() / ".config" / "ollamaterm"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+
+LEGACY_CONFIG_DIR = Path.home() / ".config" / "ollama-chat"
+LEGACY_CONFIG_PATH = LEGACY_CONFIG_DIR / "config.toml"
 
 HEX_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
 VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
@@ -36,8 +39,8 @@ class AppConfig(BaseModel):
     """Application metadata and terminal integration options."""
 
     model_config = ConfigDict(populate_by_name=True)
-    title: str = "Ollama Chat"
-    window_class: str = Field(default="ollama-chat-tui", alias="class")
+    title: str = "OllamaTerm"
+    window_class: str = Field(default="ollamaterm", alias="class")
     connection_check_interval_seconds: int = Field(default=15, ge=1, le=3600)
 
     @field_validator("title", "window_class", mode="before")
@@ -59,6 +62,8 @@ class OllamaConfig(BaseModel):
     models: list[str] = Field(default_factory=list)
     timeout: int = Field(default=120, ge=1, le=3600)
     system_prompt: str = "You are a helpful assistant."
+    prompt_presets: dict[str, str] = Field(default_factory=dict)
+    active_prompt_preset: str = ""
     max_history_messages: int = Field(default=200, ge=1, le=100_000)
     max_context_tokens: int = Field(default=4096, ge=128, le=1_000_000)
     pull_model_on_start: bool = True
@@ -79,6 +84,31 @@ class OllamaConfig(BaseModel):
         if not isinstance(value, str):
             raise ValueError("Expected a string value.")
         return value.strip()
+
+    @field_validator("active_prompt_preset", mode="before")
+    @classmethod
+    def _normalize_active_preset(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError("active_prompt_preset must be a string.")
+        return value.strip()
+
+    @field_validator("prompt_presets", mode="before")
+    @classmethod
+    def _validate_prompt_presets(cls, value: Any) -> dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("prompt_presets must be a table/dict of name -> prompt.")
+        presets: dict[str, str] = {}
+        for k, v in value.items():
+            if not isinstance(k, str) or not k.strip():
+                raise ValueError("prompt_presets keys must be non-empty strings.")
+            if not isinstance(v, str):
+                raise ValueError("prompt_presets values must be strings.")
+            presets[k.strip()] = v.strip()
+        return presets
 
     @field_validator("models", mode="before")
     @classmethod
@@ -111,6 +141,13 @@ class OllamaConfig(BaseModel):
             if model_name not in deduped:
                 deduped.append(model_name)
         self.models = deduped
+
+        # Apply prompt preset selection if configured.
+        preset_name = (self.active_prompt_preset or "").strip()
+        if preset_name:
+            preset_value = self.prompt_presets.get(preset_name)
+            if isinstance(preset_value, str) and preset_value.strip():
+                self.system_prompt = preset_value.strip()
         return self
 
 
@@ -196,7 +233,7 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
     structured: bool = True
     log_to_file: bool = False
-    log_file_path: str = "~/.local/state/ollama-chat/app.log"
+    log_file_path: str = "~/.local/state/ollamaterm/app.log"
 
     @field_validator("level", mode="before")
     @classmethod
@@ -224,8 +261,8 @@ class PersistenceConfig(BaseModel):
 
     enabled: bool = False
     auto_save: bool = True
-    directory: str = "~/.local/state/ollama-chat/conversations"
-    metadata_path: str = "~/.local/state/ollama-chat/conversations/index.json"
+    directory: str = "~/.local/state/ollamaterm/conversations"
+    metadata_path: str = "~/.local/state/ollamaterm/conversations/index.json"
 
     @field_validator("directory", "metadata_path", mode="before")
     @classmethod
@@ -333,6 +370,47 @@ def _enforce_private_permissions(path: Path) -> None:
         LOGGER.warning("Unable to enforce 0600 permissions for %s: %s", path, exc)
 
 
+def _migrate_legacy_config(target_path: Path) -> None:
+    """Auto-copy the legacy config to the new location when it exists.
+
+    Migration rules:
+    - If target_path exists, do nothing.
+    - If legacy config exists, copy it to target_path and warn.
+    """
+
+    if target_path.exists():
+        return
+    if target_path != CONFIG_PATH:
+        return
+    if not LEGACY_CONFIG_PATH.exists():
+        return
+
+    try:
+        ensure_config_dir(CONFIG_DIR)
+        target_path.write_text(
+            LEGACY_CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        _enforce_private_permissions(target_path)
+        LOGGER.warning(
+            "config.migrated",
+            extra={
+                "event": "config.migrated",
+                "legacy_path": str(LEGACY_CONFIG_PATH),
+                "new_path": str(target_path),
+            },
+        )
+    except OSError as exc:
+        LOGGER.warning(
+            "config.migrate_failed",
+            extra={
+                "event": "config.migrate_failed",
+                "legacy_path": str(LEGACY_CONFIG_PATH),
+                "new_path": str(target_path),
+                "reason": str(exc),
+            },
+        )
+
+
 def _safe_default_config() -> dict[str, dict[str, Any]]:
     """Return a deep copy of validated default config data."""
     return deepcopy(DEFAULT_CONFIG)
@@ -358,6 +436,9 @@ def load_config(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
     """
     target_path = config_path or CONFIG_PATH
     ensure_config_dir(target_path.parent)
+
+    if config_path is None:
+        _migrate_legacy_config(target_path)
 
     raw_data: dict[str, Any] = {}
     if target_path.exists():

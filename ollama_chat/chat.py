@@ -329,10 +329,14 @@ class OllamaChat:
         if tools:
             kwargs["tools"] = tools
 
-        if "think" not in self._chat_param_names:
-            kwargs.pop("think", None)
-        if "tools" not in self._chat_param_names:
-            kwargs.pop("tools", None)
+        # Only strip optional kwargs when we *know* the SDK doesn't accept them.
+        # If signature introspection failed (empty set), keep kwargs so tests and
+        # newer SDK versions can still receive them.
+        if self._chat_param_names:
+            if "think" not in self._chat_param_names:
+                kwargs.pop("think", None)
+            if "tools" not in self._chat_param_names:
+                kwargs.pop("tools", None)
 
         stream = await self._client.chat(**kwargs)
         async for chunk in stream:

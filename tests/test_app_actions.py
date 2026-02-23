@@ -108,7 +108,7 @@ class _FakePersistence:
         self.exported = False
 
     def save_conversation(
-        self, messages: list[dict[str, str]], model: str
+        self, messages: list[dict[str, str]], model: str, name: str = ""
     ) -> str:  # noqa: ARG002
         self.saved = True
         return "/tmp/conv.json"
@@ -136,6 +136,9 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         assert OllamaChatApp is not None
+        async def _no_prompt(self) -> str:  # noqa: ANN001
+            return ""
+
         self.app = type(
             "FakeApp",
             (),
@@ -153,6 +156,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
                 "action_search_messages": OllamaChatApp.action_search_messages,
                 "action_copy_last_message": OllamaChatApp.action_copy_last_message,
                 "action_new_conversation": OllamaChatApp.action_new_conversation,
+                "_prompt_conversation_name": _no_prompt,
             },
         )()
         self.app.config = {"ui": {"show_timestamps": False}}

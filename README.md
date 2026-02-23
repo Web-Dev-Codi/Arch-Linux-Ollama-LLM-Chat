@@ -26,9 +26,9 @@
 
 ## Table of Contents
 
-- [Ollama Chat TUI](#ollamaterm-tui)
+- [OllamaTerm](#ollamaterm)
   - [Table of Contents](#table-of-contents)
-  - [Why Ollama Chat TUI?](#why-ollamaterm-tui)
+  - [Why OllamaTerm?](#why-ollamaterm)
   - [Features](#features)
     - [Core Chat](#core-chat)
     - [Model Management](#model-management)

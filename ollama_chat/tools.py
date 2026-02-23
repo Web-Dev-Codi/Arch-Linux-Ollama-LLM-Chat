@@ -19,6 +19,18 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency.
 LOGGER = logging.getLogger(__name__)
 
 
+def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
+    old_value = os.environ.get(key)
+    os.environ[key] = value
+    try:
+        return fn()
+    finally:
+        if old_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old_value
+
+
 class ToolRegistry:
     """Registry of callable tools available to the model during an agent loop."""
 
@@ -80,9 +92,12 @@ def _make_web_search_tool(api_key: str) -> Callable[..., str]:
         Returns:
             Formatted search results as a string.
         """
-        os.environ["OLLAMA_API_KEY"] = api_key
         try:
-            return str(_ollama_web_search(query, max_results=max_results))
+            return _with_temp_env(
+                "OLLAMA_API_KEY",
+                api_key,
+                lambda: str(_ollama_web_search(query, max_results=max_results)),
+            )
         except Exception as exc:  # noqa: BLE001
             raise OllamaToolError(f"web_search failed: {exc}") from exc
 
@@ -106,9 +121,12 @@ def _make_web_fetch_tool(api_key: str) -> Callable[..., str]:
         Returns:
             The page title and content as a string.
         """
-        os.environ["OLLAMA_API_KEY"] = api_key
         try:
-            return str(_ollama_web_fetch(url))
+            return _with_temp_env(
+                "OLLAMA_API_KEY",
+                api_key,
+                lambda: str(_ollama_web_fetch(url)),
+            )
         except Exception as exc:  # noqa: BLE001
             raise OllamaToolError(f"web_fetch failed: {exc}") from exc
 

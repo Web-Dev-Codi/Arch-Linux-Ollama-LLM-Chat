@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Any
 
 
@@ -17,14 +18,27 @@ class StreamHandler:
         bubble: Any,
         scroll_callback: Callable[[], None],
         chunk_size: int = 1,
+        min_update_interval_seconds: float = 0.05,
     ) -> None:
         self._bubble = bubble
         self._scroll = scroll_callback
         self._chunk_size = max(1, chunk_size)
+        self._min_update_interval_seconds = max(0.0, min_update_interval_seconds)
         self.response_started: bool = False
         self.thinking_started: bool = False
         self._content_buffer: list[str] = []
         self._status: str = ""
+        self._last_update_ts = 0.0
+
+    def _maybe_scroll(self, *, force: bool = False) -> None:
+        if force or self._min_update_interval_seconds <= 0:
+            self._last_update_ts = time.monotonic()
+            self._scroll()
+            return
+        now = time.monotonic()
+        if now - self._last_update_ts >= self._min_update_interval_seconds:
+            self._last_update_ts = now
+            self._scroll()
 
     @property
     def status(self) -> str:
@@ -45,7 +59,7 @@ class StreamHandler:
             self.thinking_started = True
             self._status = "Thinking..."
         self._bubble.append_thinking(text)
-        self._scroll()
+        self._maybe_scroll()
 
     async def handle_content(
         self,
@@ -79,20 +93,20 @@ class StreamHandler:
         self.flush_buffer()
         self._bubble.append_tool_call(tool_name, tool_args)
         self._status = f"Calling tool: {tool_name}..."
-        self._scroll()
+        self._maybe_scroll(force=True)
 
     def handle_tool_result(self, tool_name: str, tool_result: str) -> None:
         """Process a tool_result chunk."""
         self._bubble.append_tool_result(tool_name, tool_result)
         self._status = "Processing tool result..."
-        self._scroll()
+        self._maybe_scroll(force=True)
 
     def flush_buffer(self) -> None:
         """Flush any buffered content text into the bubble."""
         if self._content_buffer:
             self._bubble.append_content("".join(self._content_buffer))
             self._content_buffer.clear()
-            self._scroll()
+            self._maybe_scroll(force=True)
 
     async def finalize(self) -> None:
         """Flush remaining buffer and finalize the bubble content."""

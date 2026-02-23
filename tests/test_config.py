@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from ollama_chat.config import DEFAULT_CONFIG, load_config
+from ollama_chat.config import DEFAULT_CONFIG, LEGACY_CONFIG_DIR, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -143,6 +143,46 @@ allowed_hosts = ["localhost"]
             config = load_config(config_path=config_path)
             self.assertEqual(config["ollama"]["host"], "http://example.com:11434")
             self.assertTrue(config["security"]["allow_remote_hosts"])
+
+    def test_legacy_config_is_copied_to_new_location(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            legacy_dir = base / "legacy"
+            new_dir = base / "new"
+            legacy_path = legacy_dir / "config.toml"
+            new_path = new_dir / "config.toml"
+            legacy_dir.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_text(
+                """
+[app]
+title = "Legacy Title"
+class = "legacy-class"
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            import ollama_chat.config as config_mod
+
+            original_legacy_dir = config_mod.LEGACY_CONFIG_DIR
+            original_legacy_path = config_mod.LEGACY_CONFIG_PATH
+            original_config_dir = config_mod.CONFIG_DIR
+            original_config_path = config_mod.CONFIG_PATH
+            try:
+                config_mod.LEGACY_CONFIG_DIR = legacy_dir
+                config_mod.LEGACY_CONFIG_PATH = legacy_path
+                config_mod.CONFIG_DIR = new_dir
+                config_mod.CONFIG_PATH = new_path
+
+                # Trigger migration by calling load_config without explicit config_path.
+                loaded = config_mod.load_config()
+                self.assertTrue(new_path.exists())
+                self.assertEqual(loaded["app"]["title"], "Legacy Title")
+                self.assertEqual(loaded["app"]["class"], "legacy-class")
+            finally:
+                config_mod.LEGACY_CONFIG_DIR = original_legacy_dir
+                config_mod.LEGACY_CONFIG_PATH = original_legacy_path
+                config_mod.CONFIG_DIR = original_config_dir
+                config_mod.CONFIG_PATH = original_config_path
 
 
 if __name__ == "__main__":

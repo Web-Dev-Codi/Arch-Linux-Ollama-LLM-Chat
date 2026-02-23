@@ -53,11 +53,20 @@ class FakeClient:
         self.pull_calls: list[str] = []
 
     async def chat(
-        self, model: str, messages: list[dict], stream: bool, **kwargs
+        self,
+        model: str,
+        messages: list[dict],
+        stream: bool,
+        think: bool = False,
+        tools: object | None = None,
+        **kwargs,
     ) -> AsyncGenerator[dict, None]:  # noqa: ARG002
         self.calls += 1
         self.messages_per_call.append(list(messages))
-        self.kwargs_per_call.append(dict(kwargs))
+        merged = dict(kwargs)
+        merged["think"] = think
+        merged["tools"] = tools
+        self.kwargs_per_call.append(merged)
         if self.calls in self.fail_calls:
             raise RuntimeError("simulated transient failure")
         payload_index = min(self.calls - 1, len(self.responses) - 1)
