@@ -15,6 +15,14 @@ class ConversationState(str, Enum):
     CANCELLING = "CANCELLING"
 
 
+class ConnectionState(str, Enum):
+    """Observable connection status for the Ollama host."""
+
+    ONLINE = "online"
+    OFFLINE = "offline"
+    UNKNOWN = "unknown"
+
+
 class StateManager:
     """Manage state transitions with async lock semantics."""
 

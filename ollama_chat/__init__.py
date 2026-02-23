@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .app import OllamaChatApp
+    from .capabilities import AttachmentState, CapabilityContext, SearchState
     from .chat import OllamaChat
     from .config import ensure_config_dir, load_config
     from .exceptions import (
@@ -17,10 +18,15 @@ if TYPE_CHECKING:
     )
     from .message_store import MessageStore
     from .persistence import ConversationPersistence
-    from .state import ConversationState, StateManager
+    from .state import ConnectionState, ConversationState, StateManager
+    from .stream_handler import StreamHandler
+    from .task_manager import TaskManager
 
 __all__ = [
+    "AttachmentState",
+    "CapabilityContext",
     "ConfigValidationError",
+    "ConnectionState",
     "ConversationState",
     "MessageStore",
     "ConversationPersistence",
@@ -30,7 +36,10 @@ __all__ = [
     "OllamaConnectionError",
     "OllamaModelNotFoundError",
     "OllamaStreamingError",
+    "SearchState",
     "StateManager",
+    "StreamHandler",
+    "TaskManager",
     "ensure_config_dir",
     "load_config",
 ]
@@ -70,16 +79,34 @@ def __getattr__(name: str) -> Any:
             "OllamaModelNotFoundError": OllamaModelNotFoundError,
             "OllamaStreamingError": OllamaStreamingError,
         }[name]
-    if name in {"ConversationState", "StateManager"}:
-        from .state import ConversationState, StateManager
+    if name in {"ConnectionState", "ConversationState", "StateManager"}:
+        from .state import ConnectionState, ConversationState, StateManager
 
-        return {"ConversationState": ConversationState, "StateManager": StateManager}[
-            name
-        ]
+        return {
+            "ConnectionState": ConnectionState,
+            "ConversationState": ConversationState,
+            "StateManager": StateManager,
+        }[name]
     if name == "MessageStore":
         from .message_store import MessageStore
 
         return MessageStore
+    if name in {"AttachmentState", "CapabilityContext", "SearchState"}:
+        from .capabilities import AttachmentState, CapabilityContext, SearchState
+
+        return {
+            "AttachmentState": AttachmentState,
+            "CapabilityContext": CapabilityContext,
+            "SearchState": SearchState,
+        }[name]
+    if name == "StreamHandler":
+        from .stream_handler import StreamHandler
+
+        return StreamHandler
+    if name == "TaskManager":
+        from .task_manager import TaskManager
+
+        return TaskManager
     if name == "ConversationPersistence":
         from .persistence import ConversationPersistence
 

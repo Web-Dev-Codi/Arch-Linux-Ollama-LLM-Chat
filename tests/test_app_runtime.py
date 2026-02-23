@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 import os
 import unittest
@@ -121,7 +122,8 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
         app.chat = _RuntimeFakeChat(failure=failure)  # type: ignore[assignment]
         app.persistence = _RuntimeFakePersistence()  # type: ignore[assignment]
         app._configured_models = ["llama3.2", "qwen2.5"]
-        app._connection_state = "online"
+        from ollama_chat.state import ConnectionState
+        app._connection_state = ConnectionState.ONLINE
         app.config["app"]["connection_check_interval_seconds"] = 999
         app._copied_text = ""
         app.copy_to_clipboard = lambda value: setattr(app, "_copied_text", value)  # type: ignore[method-assign]
@@ -251,7 +253,7 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         async with app.run_test():
             task = asyncio.create_task(_long_running())
-            app._background_tasks.add(task)
+            app._task_manager.add(task)
 
         # After the context manager exits, on_unmount has been called.
         self.assertTrue(task.done(), "Long-running task should be done after unmount.")
@@ -349,6 +351,62 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             input_widget.value = "/image ~/photo.png describe this"
             await app.send_user_message()
             self.assertNotEqual(app.sub_title, "Input cleared.")
+
+
+    async def test_connection_monitor_reads_interval_from_config(self) -> None:
+        """_connection_monitor_loop uses connection_check_interval_seconds from config."""
+        from unittest.mock import AsyncMock, patch
+
+        app = self._build_app()
+        app.config["app"]["connection_check_interval_seconds"] = 30
+
+        sleep_values: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def _capture_sleep(seconds: float) -> None:
+            sleep_values.append(seconds)
+            raise asyncio.CancelledError
+
+        async with app.run_test():
+            with patch("ollama_chat.app.asyncio.sleep", side_effect=_capture_sleep):
+                try:
+                    await app._connection_monitor_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        self.assertTrue(len(sleep_values) >= 1)
+        # Jitter band: 30 * 0.85 = 25.5, 30 * 1.15 = 34.5
+        self.assertGreaterEqual(sleep_values[0], 25.5)
+        self.assertLessEqual(sleep_values[0], 34.5)
+
+    async def test_connection_monitor_jitter_band(self) -> None:
+        """Sleep value falls within the expected ±15% jitter band."""
+        from unittest.mock import patch
+
+        app = self._build_app()
+        app.config["app"]["connection_check_interval_seconds"] = 10
+
+        sleep_values: list[float] = []
+        call_count = 0
+
+        async def _capture_sleep(seconds: float) -> None:
+            nonlocal call_count
+            sleep_values.append(seconds)
+            call_count += 1
+            if call_count >= 5:
+                raise asyncio.CancelledError
+
+        async with app.run_test():
+            with patch("ollama_chat.app.asyncio.sleep", side_effect=_capture_sleep):
+                try:
+                    await app._connection_monitor_loop()
+                except asyncio.CancelledError:
+                    pass
+
+        self.assertEqual(len(sleep_values), 5)
+        for value in sleep_values:
+            self.assertGreaterEqual(value, 10 * 0.85)
+            self.assertLessEqual(value, 10 * 1.15)
 
 
 class NativeFileDialogTests(unittest.IsolatedAsyncioTestCase):

@@ -159,12 +159,13 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         self.app.chat = _FakeChat()
         self.app.persistence = _FakePersistence()
         self.app.state = StateManager()
-        self.app._active_stream_task = None
-        self.app._background_tasks = set()
-        self.app._connection_state = "online"
-        self.app._search_query = ""
-        self.app._search_results = []
-        self.app._search_position = -1
+        from ollama_chat.state import ConnectionState
+        from ollama_chat.capabilities import AttachmentState, SearchState
+        from ollama_chat.task_manager import TaskManager
+        self.app._task_manager = TaskManager()
+        self.app._connection_state = ConnectionState.ONLINE
+        self.app._search = SearchState()
+        self.app._attachments = AttachmentState()
         self.app._configured_models = ["llama3.2", "qwen2.5"]
         self.app.sub_title = ""
         self.app._conversation = _FakeConversation()

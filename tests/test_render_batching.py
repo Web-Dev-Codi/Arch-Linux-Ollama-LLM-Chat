@@ -45,6 +45,9 @@ class _FakeBubble:
     def append_tool_result(self, name: str, result: str) -> None:  # noqa: ARG002
         pass
 
+    async def finalize_content(self) -> None:
+        pass
+
 
 class _FakeChat:
     def __init__(self, chunks: list[str]) -> None:
@@ -65,10 +68,11 @@ class _FakeApp:
         self.chat = _FakeChat(chunks)
         self._conversation = _FakeConversation()
         self.sub_title = ""
-        self._response_indicator_task = None
         self._tool_registry = None
-        self._cap_think = False
-        self._cap_max_tool_iterations = 10
+        from ollama_chat.capabilities import CapabilityContext
+        from ollama_chat.task_manager import TaskManager
+        self.capabilities = CapabilityContext(think=False, max_tool_iterations=10)
+        self._task_manager = TaskManager()
 
     def query_one(self, *_args, **_kwargs) -> _FakeConversation:
         return self._conversation
@@ -86,18 +90,7 @@ class _FakeApp:
 
     async def _stop_response_indicator_task(self) -> None:
         """Stub: cancel the indicator task if it is running."""
-        import asyncio
-
-        task = self._response_indicator_task
-        self._response_indicator_task = None
-        if task is None:
-            return
-        if not task.done():
-            task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        await self._task_manager.cancel("response_indicator")
 
 
 @unittest.skipIf(OllamaChatApp is None, "textual is not installed")
