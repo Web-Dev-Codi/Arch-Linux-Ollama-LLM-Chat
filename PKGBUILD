@@ -1,5 +1,5 @@
 pkgname=ollamaterm
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='ChatGPT-style TUI for Ollama local LLMs'
 arch=('any')
