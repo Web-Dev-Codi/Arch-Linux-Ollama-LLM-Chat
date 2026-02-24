@@ -495,8 +495,17 @@ class OllamaChatApp(App[None]):
             ("/conversations", "Open conversation picker"),
         ]
 
-        # Capabilities configuration.
+        # Capabilities configuration (user preferences from config — the ceiling).
         self.capabilities = CapabilityContext.from_config(self.config)
+
+        # Per-model runtime capabilities fetched from Ollama's /api/show.
+        # Empty frozenset = unknown (show() unavailable or model has no metadata);
+        # effective caps fall back to config flags when this is empty.
+        self._model_caps: frozenset[str] = frozenset()
+
+        # Effective capabilities = intersection of user config + model's actual support.
+        # Populated after every ensure_model_ready(); defaults to config until then.
+        self._effective_caps: CapabilityContext = self.capabilities
 
         # Build the tool registry based on capabilities.
         if self.capabilities.tools_enabled:
@@ -835,6 +844,9 @@ class OllamaChatApp(App[None]):
         try:
             await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
             self._connection_state = ConnectionState.ONLINE
+            # Detect what this model actually supports and update effective caps.
+            self._model_caps = await self.chat.show_model_capabilities()
+            self._update_effective_caps()
             self._set_idle_sub_title(f"Model ready: {self.chat.model}")
         except OllamaConnectionError:
             self._connection_state = ConnectionState.OFFLINE
@@ -850,6 +862,64 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Failed while preparing model."
         except OllamaChatError:
             self.sub_title = "Model preparation failed."
+
+    def _update_effective_caps(self) -> None:
+        """Recompute _effective_caps from user config AND model-reported capabilities.
+
+        When ``_model_caps`` is empty (show() unavailable or returned no capability
+        metadata), the user's config flags are used unchanged — permissive fallback
+        that preserves existing behaviour for older Ollama versions and custom models.
+
+        When ``_model_caps`` is non-empty the app intersects the two sets: a feature
+        is active only if the user *wants* it (config) **and** the model *supports* it
+        (Ollama's /api/show response).  This prevents 400 errors from sending e.g.
+        ``tools=[...]`` to a model that doesn't understand tool-calling.
+        """
+        if not self._model_caps:
+            # Unknown capabilities — fall back to user config unchanged.
+            self._effective_caps = self.capabilities
+            return
+
+        self._effective_caps = CapabilityContext(
+            think=self.capabilities.think and "thinking" in self._model_caps,
+            show_thinking=self.capabilities.show_thinking,
+            tools_enabled=self.capabilities.tools_enabled
+            and "tools" in self._model_caps,
+            # web_search requires tool-calling; disable it when the model can't do tools.
+            web_search_enabled=(
+                self.capabilities.web_search_enabled and "tools" in self._model_caps
+            ),
+            web_search_api_key=self.capabilities.web_search_api_key,
+            vision_enabled=self.capabilities.vision_enabled
+            and "vision" in self._model_caps,
+            max_tool_iterations=self.capabilities.max_tool_iterations,
+        )
+
+        # Log any features silently downgraded due to model limitations.
+        downgrades = [
+            (
+                self.capabilities.tools_enabled,
+                self._effective_caps.tools_enabled,
+                "tools",
+            ),
+            (self.capabilities.think, self._effective_caps.think, "thinking"),
+            (
+                self.capabilities.vision_enabled,
+                self._effective_caps.vision_enabled,
+                "vision",
+            ),
+        ]
+        for wanted, got, name in downgrades:
+            if wanted and not got:
+                LOGGER.info(
+                    "app.capability.downgrade",
+                    extra={
+                        "event": "app.capability.downgrade",
+                        "feature": name,
+                        "model": self.chat.model,
+                        "reason": "model does not report this capability",
+                    },
+                )
 
     def _apply_theme(self) -> None:
         """Apply fallback theme settings and restyle mounted widgets."""
@@ -935,6 +1005,7 @@ class OllamaChatApp(App[None]):
             model=self.chat.model,
             message_count=message_count,
             estimated_tokens=self.chat.estimated_context_tokens,
+            effective_caps=getattr(self, "_effective_caps", None),
         )
 
     async def _open_configured_model_picker(self) -> None:
@@ -971,7 +1042,34 @@ class OllamaChatApp(App[None]):
         try:
             await self.chat.ensure_model_ready(pull_if_missing=False)
             self._connection_state = ConnectionState.ONLINE
-            self._set_idle_sub_title(f"Active model: {model_name}")
+
+            # Fetch this model's actual capabilities and recompute effective flags.
+            self._model_caps = await self.chat.show_model_capabilities(model_name)
+            self._update_effective_caps()
+
+            # Build a subtitle that tells the user which config features were disabled
+            # because this model doesn't support them.
+            downgraded = [
+                cap
+                for wanted, now, cap in [
+                    (
+                        self.capabilities.tools_enabled,
+                        self._effective_caps.tools_enabled,
+                        "tools",
+                    ),
+                    (self.capabilities.think, self._effective_caps.think, "thinking"),
+                    (
+                        self.capabilities.vision_enabled,
+                        self._effective_caps.vision_enabled,
+                        "vision",
+                    ),
+                ]
+                if wanted and not now
+            ]
+            msg = f"Active model: {model_name}"
+            if downgraded:
+                msg += f"  |  Disabled (not supported): {', '.join(downgraded)}"
+            self._set_idle_sub_title(msg)
         except OllamaChatError as exc:  # noqa: BLE001
             self.chat.set_model(previous_model)
             LOGGER.warning(
@@ -1032,7 +1130,7 @@ class OllamaChatApp(App[None]):
             content=content,
             role=role,
             timestamp=timestamp,
-            show_thinking=self.capabilities.show_thinking,
+            show_thinking=self._effective_caps.show_thinking,
         )
         self._style_bubble(bubble, role)
         return bubble
@@ -1080,8 +1178,8 @@ class OllamaChatApp(App[None]):
         self, _message: InputBox.AttachRequested
     ) -> None:
         """Open native image picker when attach button is clicked."""
-        if not self.capabilities.vision_enabled:
-            self.sub_title = "Vision is disabled in capabilities config."
+        if not self._effective_caps.vision_enabled:
+            self.sub_title = "Vision is not supported by this model."
             return
         await self._open_attachment_dialog("image")
 
@@ -1158,7 +1256,7 @@ class OllamaChatApp(App[None]):
             expanded = os.path.expanduser(path)
             if not os.path.isfile(expanded):
                 continue
-            if self._is_image_path(expanded) and self.capabilities.vision_enabled:
+            if self._is_image_path(expanded) and self._effective_caps.vision_enabled:
                 self._attachments.add_image(expanded)
                 added_images += 1
             else:
@@ -1293,9 +1391,14 @@ class OllamaChatApp(App[None]):
             async for chunk in self.chat.send_message(
                 user_text,
                 images=images or None,
-                tool_registry=self._tool_registry,
-                think=self.capabilities.think,
-                max_tool_iterations=self.capabilities.max_tool_iterations,
+                # Pass tool_registry only when the *effective* caps say tools are on.
+                # _effective_caps already intersects config + what Ollama reports for
+                # this model, so models that don't support tools get tool_registry=None.
+                tool_registry=(
+                    self._tool_registry if self._effective_caps.tools_enabled else None
+                ),
+                think=self._effective_caps.think,
+                max_tool_iterations=self._effective_caps.max_tool_iterations,
             ):
                 if chunk.kind == "thinking":
                     await handler.handle_thinking(
@@ -1571,7 +1674,7 @@ class OllamaChatApp(App[None]):
                 return
 
         directives = parse_inline_directives(
-            raw_text, vision_enabled=self.capabilities.vision_enabled
+            raw_text, vision_enabled=self._effective_caps.vision_enabled
         )
         user_text = directives.cleaned_text
         inline_images = directives.image_paths

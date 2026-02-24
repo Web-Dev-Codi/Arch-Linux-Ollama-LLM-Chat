@@ -46,9 +46,7 @@ class _RuntimeFakePersistence:
             ],
         }
 
-    def export_markdown(
-        self, messages: list[dict[str, str]], model: str
-    ) -> str:  # noqa: ARG002
+    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/runtime-export.md"
 
@@ -63,9 +61,7 @@ class _RuntimeFakeChat:
     def estimated_context_tokens(self) -> int:
         return 10 + len(self.messages)
 
-    async def send_message(
-        self, user_message: str, **kwargs
-    ) -> AsyncGenerator:  # noqa: ARG002
+    async def send_message(self, user_message: str, **kwargs) -> AsyncGenerator:  # noqa: ARG002
         from ollama_chat.chat import ChatChunk
 
         self.messages.append({"role": "user", "content": user_message})
@@ -84,13 +80,15 @@ class _RuntimeFakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(
-        self, pull_if_missing: bool = True
-    ) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
         return True
+
+    async def show_model_capabilities(self, model_name: str | None = None) -> frozenset:  # noqa: ARG002
+        """Fake: returns empty set so effective caps fall back to config."""
+        return frozenset()
 
     @staticmethod
     def _model_name_matches(requested_model: str, available_model: str) -> bool:
@@ -123,10 +121,12 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
         app.persistence = _RuntimeFakePersistence()  # type: ignore[assignment]
         app._configured_models = ["llama3.2", "qwen2.5"]
         from ollama_chat.state import ConnectionState
+
         app._connection_state = ConnectionState.ONLINE
         app.config["app"]["connection_check_interval_seconds"] = 999
         app._copied_text = ""
         app.copy_to_clipboard = lambda value: setattr(app, "_copied_text", value)  # type: ignore[method-assign]
+
         async def _no_prompt() -> str:
             return ""
 
@@ -312,7 +312,6 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(app.persistence.saved)
 
-
     async def test_slash_new_dispatches_new_conversation(self) -> None:
         app = self._build_app()
         async with app.run_test():
@@ -359,7 +358,6 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             input_widget.value = "/image ~/photo.png describe this"
             await app.send_user_message()
             self.assertNotEqual(app.sub_title, "Input cleared.")
-
 
     async def test_connection_monitor_reads_interval_from_config(self) -> None:
         """_connection_monitor_loop uses connection_check_interval_seconds from config."""

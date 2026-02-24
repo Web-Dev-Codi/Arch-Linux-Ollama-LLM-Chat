@@ -218,6 +218,44 @@ class OllamaChat:
         except Exception:
             return False
 
+    async def show_model_capabilities(
+        self, model_name: str | None = None
+    ) -> frozenset[str]:
+        """Return the capability strings reported by Ollama's /api/show for a model.
+
+        Capabilities are lowercase strings such as ``"tools"``, ``"vision"``,
+        and ``"thinking"``.  An **empty** frozenset means the information is
+        unavailable (old Ollama version, model not found, or the model predates
+        capability metadata) — callers should treat an empty result as *unknown*
+        and keep their config flags unchanged (permissive fallback).
+
+        A **non-empty** frozenset is the authoritative list from Ollama and
+        should be intersected with user config flags to derive effective behaviour.
+        """
+        name = (model_name or self.model).strip()
+        try:
+            response = await self._client.show(name)
+            caps: Any = None
+            if hasattr(response, "capabilities"):
+                caps = getattr(response, "capabilities")
+            elif isinstance(response, dict):
+                caps = response.get("capabilities")
+            elif hasattr(response, "model_dump"):
+                try:
+                    caps = response.model_dump().get("capabilities")
+                except Exception:
+                    pass
+            # Only trust a non-empty list; an empty list is treated as "unknown"
+            # so that old model metadata does not silently disable all features.
+            if isinstance(caps, list) and caps:
+                return frozenset(str(c).lower().strip() for c in caps if c)
+        except Exception:
+            LOGGER.debug(
+                "chat.model.show.failed",
+                extra={"event": "chat.model.show.failed", "model": name},
+            )
+        return frozenset()
+
     @property
     def estimated_context_tokens(self) -> int:
         """Return deterministic token estimate for current context."""

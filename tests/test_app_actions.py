@@ -79,6 +79,10 @@ class _FakeChat:
     async def check_connection(self) -> bool:
         return True
 
+    async def show_model_capabilities(self, model_name: str | None = None) -> frozenset:  # noqa: ARG002
+        """Fake: returns empty set so effective caps fall back to config."""
+        return frozenset()
+
     @staticmethod
     def _model_name_matches(requested_model: str, available_model: str) -> bool:
         requested = requested_model.strip().lower()
@@ -146,6 +150,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
                 "_jump_to_search_result": OllamaChatApp._jump_to_search_result,
                 "_transition_state": OllamaChatApp._transition_state,
                 "_activate_selected_model": OllamaChatApp._activate_selected_model,
+                "_update_effective_caps": OllamaChatApp._update_effective_caps,
                 "action_toggle_model_picker": OllamaChatApp.action_toggle_model_picker,
                 "action_save_conversation": OllamaChatApp.action_save_conversation,
                 "action_load_conversation": OllamaChatApp.action_load_conversation,
@@ -170,10 +175,22 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         self.app._search = SearchState()
         self.app._attachments = AttachmentState()
         self.app._configured_models = ["llama3.2", "qwen2.5"]
+        from ollama_chat.capabilities import CapabilityContext
+
+        self.app.capabilities = CapabilityContext()
+        self.app._model_caps = frozenset()
+        self.app._effective_caps = CapabilityContext()
         self.app.sub_title = ""
         self.app._conversation = _FakeConversation()
         self.app._input = _FakeInput()
         self.app._status = _FakeStatusBar()
+        # Widget cache refs (match on_mount() pattern in the real app).
+        self.app._w_conversation = self.app._conversation
+        self.app._w_input = self.app._input
+        self.app._w_status = self.app._status
+        self.app._w_send = None
+        self.app._w_file = None
+        self.app._w_activity = None
         self.app.clipboard = ""
         self.app._set_idle_sub_title = lambda text: setattr(self.app, "sub_title", text)
 

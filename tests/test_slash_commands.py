@@ -98,6 +98,13 @@ class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
         self.app._conversation = _FakeConversation()
         self.app._input = _FakeInput()
         self.app._status = _FakeStatusBar()
+        # Widget cache refs expected by app methods.
+        self.app._w_conversation = self.app._conversation
+        self.app._w_input = self.app._input
+        self.app._w_status = self.app._status
+        self.app._w_send = None
+        self.app._w_file = None
+        self.app._w_activity = None
         self.app._set_idle_sub_title = lambda text: setattr(self.app, "sub_title", text)
         self.app._hide_slash_menu = lambda: None
 

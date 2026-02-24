@@ -53,9 +53,7 @@ class _FakeChat:
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
 
-    async def send_message(
-        self, user_message: str, **kwargs
-    ) -> AsyncGenerator:  # noqa: ARG002
+    async def send_message(self, user_message: str, **kwargs) -> AsyncGenerator:  # noqa: ARG002
         from ollama_chat.chat import ChatChunk
 
         for chunk in self._chunks:
@@ -71,7 +69,10 @@ class _FakeApp:
         self._tool_registry = None
         from ollama_chat.capabilities import CapabilityContext
         from ollama_chat.task_manager import TaskManager
+
         self.capabilities = CapabilityContext(think=False, max_tool_iterations=10)
+        self._effective_caps = self.capabilities
+        self._w_conversation = self._conversation
         self._task_manager = TaskManager()
 
     def query_one(self, *_args, **_kwargs) -> _FakeConversation:
@@ -80,9 +81,7 @@ class _FakeApp:
     def _update_status_bar(self) -> None:
         return
 
-    async def _animate_response_placeholder(
-        self, bubble: _FakeBubble
-    ) -> None:  # noqa: ARG002
+    async def _animate_response_placeholder(self, bubble: _FakeBubble) -> None:  # noqa: ARG002
         """Stub: production version animates a placeholder until cancelled."""
         import asyncio
 
