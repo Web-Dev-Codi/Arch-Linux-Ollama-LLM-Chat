@@ -33,7 +33,7 @@
     - [Core Chat](#core-chat)
     - [Model Management](#model-management)
     - [Conversation Persistence](#conversation-persistence)
-    - [Capabilities](#capabilities-1)
+    - [Capabilities](#capabilities)
     - [Interface \& Integration](#interface--integration)
   - [Requirements](#requirements)
   - [Installation](#installation)
@@ -45,11 +45,12 @@
     - [Config File Location](#config-file-location)
     - [All Options](#all-options)
   - [Keybinds](#keybinds)
-  - [Capabilities](#capabilities)
+  - [Capabilities](#capabilities-1)
     - [Chain-of-thought reasoning](#chain-of-thought-reasoning)
     - [Tool calling](#tool-calling)
     - [Web search](#web-search)
     - [Vision / image attachments](#vision--image-attachments)
+    - [Context window alignment](#context-window-alignment)
   - [Desktop Integration](#desktop-integration)
     - [Hyprland + Ghostty](#hyprland--ghostty)
     - [Desktop Entry](#desktop-entry)
@@ -134,8 +135,8 @@
 ### From source (recommended)
 
 ```bash
-git clone https://github.com/Web-Dev-Codi/Arch-Linux-Ollama-LLM-Chat.git
-cd Arch-Linux-Ollama-LLM-Chat
+git clone https://github.com/Web-Dev-Codi/OllamaTerm.git
+cd OllamaTerm
 
 python -m venv .venv
 source .venv/bin/activate
