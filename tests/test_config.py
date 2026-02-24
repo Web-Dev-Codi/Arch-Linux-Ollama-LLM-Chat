@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from ollama_chat.config import DEFAULT_CONFIG, LEGACY_CONFIG_DIR, load_config
+from ollama_chat.config import DEFAULT_CONFIG, load_config
 
 
 class ConfigTests(unittest.TestCase):

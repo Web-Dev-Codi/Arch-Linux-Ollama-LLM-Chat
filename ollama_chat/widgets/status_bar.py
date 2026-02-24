@@ -10,7 +10,7 @@ from textual.message import Message
 from textual.widgets import Label, Static
 
 if TYPE_CHECKING:
-    from ollama_chat.capabilities import CapabilityContext
+    pass
 
 
 class StatusBar(Static):
