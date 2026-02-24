@@ -73,15 +73,21 @@ class _FakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(
+        self, pull_if_missing: bool = True
+    ) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
         return True
 
-    async def show_model_capabilities(self, model_name: str | None = None) -> frozenset:  # noqa: ARG002
-        """Fake: returns empty set so effective caps fall back to config."""
-        return frozenset()
+    async def show_model_capabilities(
+        self, model_name: str | None = None
+    ):  # noqa: ARG002, ANN001
+        """Fake: returns unknown caps so effective caps fall back to config."""
+        from ollama_chat.chat import CapabilityReport
+
+        return CapabilityReport(caps=frozenset(), known=False)
 
     @staticmethod
     def _model_name_matches(requested_model: str, available_model: str) -> bool:
@@ -125,7 +131,9 @@ class _FakePersistence:
             ],
         }
 
-    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def export_markdown(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/conv.md"
 
@@ -178,7 +186,9 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         from ollama_chat.capabilities import CapabilityContext
 
         self.app.capabilities = CapabilityContext()
-        self.app._model_caps = frozenset()
+        from ollama_chat.chat import CapabilityReport
+
+        self.app._model_caps = CapabilityReport(caps=frozenset(), known=False)
         self.app._effective_caps = CapabilityContext()
         self.app.sub_title = ""
         self.app._conversation = _FakeConversation()

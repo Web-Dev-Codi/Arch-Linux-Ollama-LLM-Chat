@@ -49,6 +49,21 @@ class ChatChunk:
     tool_result: str = ""
 
 
+@dataclass(frozen=True)
+class CapabilityReport:
+    """Capability metadata returned from Ollama's /api/show.
+
+    known=False means the API call failed or the response did not include a
+    capabilities field (old Ollama versions, missing metadata, etc.).
+
+    known=True means the server explicitly returned capability metadata. In that
+    case, an empty `caps` set is authoritative (the model reports no capabilities).
+    """
+
+    caps: frozenset[str]
+    known: bool
+
+
 class OllamaChat:
     """Stateful chat wrapper that keeps bounded message history and streams replies."""
 
@@ -220,7 +235,7 @@ class OllamaChat:
 
     async def show_model_capabilities(
         self, model_name: str | None = None
-    ) -> frozenset[str]:
+    ) -> CapabilityReport:
         """Return the capability strings reported by Ollama's /api/show for a model.
 
         Capabilities are lowercase strings such as ``"tools"``, ``"vision"``,
@@ -235,26 +250,58 @@ class OllamaChat:
         name = (model_name or self.model).strip()
         try:
             response = await self._client.show(name)
-            caps: Any = None
+            caps_raw: Any = None
+            caps_known = False
+
+            # SDK object path.
             if hasattr(response, "capabilities"):
-                caps = getattr(response, "capabilities")
+                caps_raw = getattr(response, "capabilities")
+                # Treat explicit None as unknown; anything else counts as present.
+                if caps_raw is not None:
+                    caps_known = True
+
+            # Dict path.
             elif isinstance(response, dict):
-                caps = response.get("capabilities")
+                if "capabilities" in response:
+                    caps_known = True
+                caps_raw = response.get("capabilities")
+
+            # Pydantic model path.
             elif hasattr(response, "model_dump"):
                 try:
-                    caps = response.model_dump().get("capabilities")
+                    dumped = response.model_dump()
+                    if "capabilities" in dumped:
+                        caps_known = True
+                    caps_raw = dumped.get("capabilities")
                 except Exception:
-                    pass
-            # Only trust a non-empty list; an empty list is treated as "unknown"
-            # so that old model metadata does not silently disable all features.
-            if isinstance(caps, list) and caps:
-                return frozenset(str(c).lower().strip() for c in caps if c)
+                    caps_raw = None
+                    caps_known = False
+
+            parsed: set[str] = set()
+            if isinstance(caps_raw, list):
+                for item in caps_raw:
+                    value = str(item).lower().strip()
+                    if value:
+                        parsed.add(value)
+            elif isinstance(caps_raw, dict):
+                # Some servers may return a mapping of capability -> bool.
+                for key, value in caps_raw.items():
+                    if value:
+                        name_key = str(key).lower().strip()
+                        if name_key:
+                            parsed.add(name_key)
+            elif isinstance(caps_raw, str):
+                # Defensive: accept comma/whitespace-separated strings.
+                parts = [p.strip().lower() for p in caps_raw.replace(",", " ").split()]
+                parsed.update(p for p in parts if p)
+
+            return CapabilityReport(caps=frozenset(parsed), known=caps_known)
         except Exception:
             LOGGER.debug(
                 "chat.model.show.failed",
                 extra={"event": "chat.model.show.failed", "model": name},
             )
-        return frozenset()
+        return CapabilityReport(caps=frozenset(), known=False)
 
     @property
     def estimated_context_tokens(self) -> int:
@@ -301,6 +348,10 @@ class OllamaChat:
     def _extract_chunk_text(cls, chunk: Any) -> str:
         """Extract streamed token text from an Ollama chunk payload."""
         value = cls._extract_from_chunk(chunk, "content")
+        if isinstance(value, str) and value:
+            return value
+        # Fallback for generate-style payloads (response instead of message.content).
+        value = cls._extract_from_chunk(chunk, "response")
         return value if isinstance(value, str) else ""
 
     @classmethod
@@ -495,7 +546,9 @@ class OllamaChat:
                         raise
                     except OllamaToolError:
                         raise
-                    except Exception as exc:  # noqa: BLE001 - external API can fail in many ways.
+                    except (
+                        Exception
+                    ) as exc:  # noqa: BLE001 - external API can fail in many ways.
                         mapped_exc = self._map_exception(exc)
                         LOGGER.warning(
                             "chat.request.retry",

@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 import random
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -25,7 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
-from .chat import OllamaChat
+from .chat import CapabilityReport, OllamaChat
 from .commands import parse_inline_directives
 from .config import load_config
 from .exceptions import (
@@ -499,9 +498,11 @@ class OllamaChatApp(App[None]):
         self.capabilities = CapabilityContext.from_config(self.config)
 
         # Per-model runtime capabilities fetched from Ollama's /api/show.
-        # Empty frozenset = unknown (show() unavailable or model has no metadata);
-        # effective caps fall back to config flags when this is empty.
-        self._model_caps: frozenset[str] = frozenset()
+        # known=False means capabilities metadata is unavailable; effective caps fall
+        # back to config flags unchanged.
+        self._model_caps: CapabilityReport = CapabilityReport(
+            caps=frozenset(), known=False
+        )
 
         # Effective capabilities = intersection of user config + model's actual support.
         # Populated after every ensure_model_ready(); defaults to config until then.
@@ -866,32 +867,35 @@ class OllamaChatApp(App[None]):
     def _update_effective_caps(self) -> None:
         """Recompute _effective_caps from user config AND model-reported capabilities.
 
-        When ``_model_caps`` is empty (show() unavailable or returned no capability
-        metadata), the user's config flags are used unchanged — permissive fallback
-        that preserves existing behaviour for older Ollama versions and custom models.
+        When capability metadata is unknown (show() unavailable or returned no
+        capability field), the user's config flags are used unchanged — permissive
+        fallback that preserves existing behaviour for older Ollama versions and
+        custom models.
 
-        When ``_model_caps`` is non-empty the app intersects the two sets: a feature
-        is active only if the user *wants* it (config) **and** the model *supports* it
-        (Ollama's /api/show response).  This prevents 400 errors from sending e.g.
-        ``tools=[...]`` to a model that doesn't understand tool-calling.
+        When capability metadata is known, the app intersects config flags with the
+        model's reported capabilities: a feature is active only if the user *wants*
+        it (config) **and** the model *supports* it (Ollama's /api/show response).
+        This prevents 400 errors from sending e.g. ``tools=[...]`` to a model that
+        doesn't understand tool-calling, and avoids models that don't support tools
+        emitting tool-call JSON into the normal assistant reply.
         """
-        if not self._model_caps:
+        if not self._model_caps.known:
             # Unknown capabilities — fall back to user config unchanged.
             self._effective_caps = self.capabilities
             return
 
+        caps = self._model_caps.caps
+
         self._effective_caps = CapabilityContext(
-            think=self.capabilities.think and "thinking" in self._model_caps,
+            think=self.capabilities.think and "thinking" in caps,
             show_thinking=self.capabilities.show_thinking,
-            tools_enabled=self.capabilities.tools_enabled
-            and "tools" in self._model_caps,
+            tools_enabled=self.capabilities.tools_enabled and "tools" in caps,
             # web_search requires tool-calling; disable it when the model can't do tools.
             web_search_enabled=(
-                self.capabilities.web_search_enabled and "tools" in self._model_caps
+                self.capabilities.web_search_enabled and "tools" in caps
             ),
             web_search_api_key=self.capabilities.web_search_api_key,
-            vision_enabled=self.capabilities.vision_enabled
-            and "vision" in self._model_caps,
+            vision_enabled=self.capabilities.vision_enabled and "vision" in caps,
             max_tool_iterations=self.capabilities.max_tool_iterations,
         )
 

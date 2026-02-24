@@ -46,7 +46,9 @@ class _RuntimeFakePersistence:
             ],
         }
 
-    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
+    def export_markdown(
+        self, messages: list[dict[str, str]], model: str
+    ) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/runtime-export.md"
 
@@ -61,7 +63,9 @@ class _RuntimeFakeChat:
     def estimated_context_tokens(self) -> int:
         return 10 + len(self.messages)
 
-    async def send_message(self, user_message: str, **kwargs) -> AsyncGenerator:  # noqa: ARG002
+    async def send_message(
+        self, user_message: str, **kwargs
+    ) -> AsyncGenerator:  # noqa: ARG002
         from ollama_chat.chat import ChatChunk
 
         self.messages.append({"role": "user", "content": user_message})
@@ -80,15 +84,21 @@ class _RuntimeFakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(
+        self, pull_if_missing: bool = True
+    ) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
         return True
 
-    async def show_model_capabilities(self, model_name: str | None = None) -> frozenset:  # noqa: ARG002
-        """Fake: returns empty set so effective caps fall back to config."""
-        return frozenset()
+    async def show_model_capabilities(
+        self, model_name: str | None = None
+    ):  # noqa: ARG002, ANN001
+        """Fake: returns unknown caps so effective caps fall back to config."""
+        from ollama_chat.chat import CapabilityReport
+
+        return CapabilityReport(caps=frozenset(), known=False)
 
     @staticmethod
     def _model_name_matches(requested_model: str, available_model: str) -> bool:
@@ -208,7 +218,6 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.sub_title, "Model switch is available only when idle.")
 
     async def test_parse_file_prefixes(self) -> None:
-        app = self._build_app()
         from ollama_chat.commands import parse_inline_directives
 
         directives = parse_inline_directives(
@@ -361,13 +370,12 @@ class AppRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_connection_monitor_reads_interval_from_config(self) -> None:
         """_connection_monitor_loop uses connection_check_interval_seconds from config."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         app = self._build_app()
         app.config["app"]["connection_check_interval_seconds"] = 30
 
         sleep_values: list[float] = []
-        original_sleep = asyncio.sleep
 
         async def _capture_sleep(seconds: float) -> None:
             sleep_values.append(seconds)
