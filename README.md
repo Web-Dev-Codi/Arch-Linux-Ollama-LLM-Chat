@@ -33,7 +33,7 @@
     - [Core Chat](#core-chat)
     - [Model Management](#model-management)
     - [Conversation Persistence](#conversation-persistence)
-    - [Capabilities (optional)](#capabilities-optional)
+    - [Capabilities](#capabilities-1)
     - [Interface \& Integration](#interface--integration)
   - [Requirements](#requirements)
   - [Installation](#installation)
@@ -98,12 +98,15 @@
 - **Search messages** and cycle through results from the input box
 - **Copy** the latest assistant reply to clipboard in one shortcut
 
-### Capabilities (optional)
+### Capabilities
 
-- **Chain-of-thought reasoning** (`think = true`) for supported models (e.g. `qwen3`, `deepseek-r1`)
-- **Tool calling** and an agent loop for multi-step model actions
-- **Web search** via Ollama's built-in tools (requires Ollama API key)
+- **Auto-detected per model** — thinking, tool calling, and vision support are read from Ollama's `/api/show` at load time; no config required
+- **Seamless model switching** — capabilities update instantly when you switch models mid-conversation
+- **Chain-of-thought reasoning** for models that support it (e.g. `qwen3`, `deepseek-r1`, `deepseek-v3.1`, `gpt-oss`)
+- **Tool calling** and a full agent loop for multi-step model actions
+- **Web search** via Ollama's built-in tools (requires an Ollama API key)
 - **Vision / image attachments** for vision-capable models (e.g. `gemma3`, `llava`)
+- **Context window alignment** — `max_context_tokens` is forwarded to Ollama as `options.num_ctx` so the server-side context window always matches the client-side trim budget
 
 ### Interface & Integration
 
@@ -275,20 +278,20 @@ directory = "~/.local/state/ollamaterm/conversations"
 metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
 [capabilities]
-# Chain-of-thought reasoning (models: qwen3, deepseek-r1, deepseek-v3.1)
-think = true
-# Display the reasoning trace inside the assistant bubble
+# Show the model's reasoning trace inside the assistant bubble.
+# Thinking support itself is auto-detected — this controls only the UI display.
 show_thinking = true
-# Enable the tool-calling agent loop
-tools_enabled = true
-# Built-in web_search / web_fetch (requires OLLAMA_API_KEY)
+
+# Built-in web_search / web_fetch (requires OLLAMA_API_KEY or web_search_api_key).
+# Only active when the model also supports tool calling (auto-detected).
 web_search_enabled = false
 web_search_api_key = ""
-# Vision / image attachments (models: gemma3, llava)
-# Use /image <path> or click Attach
-vision_enabled = true
-# Max tool-call iterations per message before the loop stops
+
+# Max tool-call iterations per message before the agent loop stops.
 max_tool_iterations = 10
+
+# NOTE: thinking support, tool calling, and vision are detected automatically
+# from Ollama's /api/show response — no manual flags needed.
 ```
 
 ---
@@ -316,27 +319,54 @@ All keybinds are rebindable in `[keybinds]`. These are the defaults:
 
 ## Capabilities
 
+Thinking, tool calling, and vision support are **detected automatically** from
+Ollama's `/api/show` endpoint each time a model is loaded or switched. No
+manual configuration is required — the status bar icons (🧠 🔧 👁) reflect
+what the active model actually supports.
+
+> **Requires Ollama ≥ 0.6** for capability metadata. Older Ollama versions fall
+> back gracefully — all features are assumed enabled and gated only by whether
+> the model responds correctly.
+
 ### Chain-of-thought reasoning
 
-Enable `think = true` in `[capabilities]` for models that support it
-(e.g. `qwen3`, `deepseek-r1`). The model's internal reasoning trace is shown
-above its final answer when `show_thinking = true`.
+Automatically active when the model reports `"thinking"` in its capabilities
+(e.g. `qwen3`, `deepseek-r1`, `deepseek-v3.1`, `gpt-oss`). The model's
+internal reasoning trace is shown above the final answer when
+`show_thinking = true` in `[capabilities]`.
+
+**GPT-OSS note:** GPT-OSS requires a string think level rather than a boolean.
+OllamaTerm detects GPT-OSS by name and automatically sends `think="medium"`.
 
 ### Tool calling
 
-Set `tools_enabled = true` to activate the agent loop. The model can invoke
-tools multiple times before producing a final answer.
+Automatically active when the model reports `"tools"` in its capabilities.
+The agent loop allows the model to invoke tools multiple times before producing
+a final answer. Control the upper bound with `max_tool_iterations` in
+`[capabilities]`.
 
 ### Web search
 
-Set `web_search_enabled = true` and provide an Ollama API key (via
-`web_search_api_key` or the `OLLAMA_API_KEY` environment variable) to allow
-the model to search and fetch web pages during a response.
+Set `web_search_enabled = true` in `[capabilities]` and provide an Ollama API
+key (via `web_search_api_key` or the `OLLAMA_API_KEY` environment variable).
+Web search also requires the active model to support tool calling
+(auto-detected) — it is silently disabled for models that do not.
 
 ### Vision / image attachments
 
-Set `vision_enabled = true` and use a vision-capable model (e.g. `gemma3`,
-`llava`). Attach images with `/image <path>` in the input box.
+Automatically active when the model reports `"vision"` in its capabilities
+(e.g. `gemma3`, `llava`). Attach images with `/image <path>` in the input box
+or use the Attach button in the toolbar.
+
+### Context window alignment
+
+`max_context_tokens` (in `[ollama]`) serves two purposes:
+
+1. **Client-side** — conversation history is trimmed to stay within this token budget before being sent
+2. **Server-side** — the value is forwarded to Ollama as `options.num_ctx` so the model's context window matches; without this, Ollama may use a smaller default and silently truncate longer conversations
+
+Increase this value for models with larger native context windows (e.g. set
+`max_context_tokens = 32768` for `llama3.2` or `qwen3`).
 
 ---
 
@@ -448,10 +478,13 @@ ruff check . && black --check . && mypy ollama_chat/ && pytest -q
 | `Connection error` on startup | Ensure `ollama serve` is running; verify `ollama.host` in config |
 | "Model not found" warning | Set `pull_model_on_start = true`, or run `ollama pull <model>` manually |
 | Empty or cut-off response | Check `ollama list` to confirm the model name; review Ollama logs |
+| Thinking / tools / vision not activating | Requires Ollama ≥ 0.6; run `ollama show <model>` and confirm `capabilities` is listed |
+| Response cuts off mid-conversation | Increase `max_context_tokens` in `[ollama]` to match the model's native context window |
 | Keybind not responding | Verify the syntax in `[keybinds]` and restart the app |
 | Colors not applied | Use valid hex format: `#RRGGBB` or `#RGB` |
 | Window class rule not matching | Ensure `app.class` is set; prefer launching with `ghostty --class=ollamaterm-tui` |
 | Tool loop not stopping | Lower `max_tool_iterations` in `[capabilities]` |
+| Web search not working | Confirm the model supports tool calling (`ollama show <model>`); set `web_search_enabled = true` and provide `OLLAMA_API_KEY` |
 
 ---
 
