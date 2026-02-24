@@ -57,8 +57,9 @@ class FakeClient:
         model: str,
         messages: list[dict],
         stream: bool,
-        think: bool = False,
+        think: bool | str = False,
         tools: object | None = None,
+        options: dict | None = None,
         **kwargs,
     ) -> AsyncGenerator[dict, None]:  # noqa: ARG002
         self.calls += 1
@@ -66,6 +67,7 @@ class FakeClient:
         merged = dict(kwargs)
         merged["think"] = think
         merged["tools"] = tools
+        merged["options"] = options
         self.kwargs_per_call.append(merged)
         if self.calls in self.fail_calls:
             raise RuntimeError("simulated transient failure")
@@ -417,11 +419,130 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(tool_result_chunks) >= 1)
         self.assertIn("Tool error", tool_result_chunks[0].tool_result)
 
+    async def test_num_ctx_passed_in_options(self) -> None:
+        """max_context_tokens is forwarded as options.num_ctx in every API call."""
+        client = FakeClient(responses=[[_content_chunk("ok")]])
+        chat = OllamaChat(
+            host="http://localhost:11434",
+            model="qwen3",
+            system_prompt="System",
+            max_context_tokens=8192,
+            client=client,
+        )
+        async for _ in chat.send_message("hello"):
+            pass
+        options = client.kwargs_per_call[0].get("options")
+        self.assertIsNotNone(options)
+        self.assertEqual(options["num_ctx"], 8192)
+
+    async def test_gpt_oss_sends_think_level_string(self) -> None:
+        """gpt-oss models receive a string think level instead of a boolean."""
+        client = FakeClient(responses=[[_content_chunk("ok")]])
+        chat = OllamaChat(
+            host="http://localhost:11434",
+            model="gpt-oss",
+            system_prompt="System",
+            client=client,
+        )
+        async for _ in chat.send_message("hello", think=True):
+            pass
+        think_val = client.kwargs_per_call[0].get("think")
+        self.assertIsInstance(think_val, str)
+        self.assertIn(think_val, {"low", "medium", "high"})
+
+    async def test_non_gpt_oss_sends_think_boolean(self) -> None:
+        """Non-GPT-OSS models receive a boolean think value."""
+        client = FakeClient(responses=[[_content_chunk("ok")]])
+        chat = OllamaChat(
+            host="http://localhost:11434",
+            model="qwen3",
+            system_prompt="System",
+            client=client,
+        )
+        async for _ in chat.send_message("hello", think=True):
+            pass
+        think_val = client.kwargs_per_call[0].get("think")
+        self.assertIs(think_val, True)
+
+    async def test_tool_call_index_preserved_in_assistant_turn(self) -> None:
+        """The index field from parallel tool calls is included in the assistant turn."""
+        call_count = 0
+
+        def _tool_call_with_index(name: str, args: dict, index: int) -> dict:
+            return {
+                "message": {
+                    "content": None,
+                    "thinking": None,
+                    "tool_calls": [
+                        {"function": {"index": index, "name": name, "arguments": args}}
+                    ],
+                }
+            }
+
+        class IndexedToolClient:
+            async def chat(self, model, messages, stream, options=None, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return _chunk_stream(
+                        [_tool_call_with_index("get_time", {"tz": "UTC"}, 0)]
+                    )
+                return _chunk_stream([_content_chunk("Done")])
+
+        def get_time(tz: str) -> str:
+            """Get time.
+
+            Args:
+                tz: Timezone.
+
+            Returns:
+                Time string.
+            """
+            return "12:00"
+
+        registry = ToolRegistry()
+        registry.register(get_time)
+
+        chat = OllamaChat(
+            host="http://localhost:11434",
+            model="qwen3",
+            system_prompt="System",
+            client=IndexedToolClient(),
+        )
+        async for _ in chat.send_message("time?", tool_registry=registry):
+            pass
+
+        # Verify via chunk — tool_index is propagated on the ChatChunk.
+        chunks: list[ChatChunk] = []
+        call_count = 0
+
+        class IndexedToolClient2(IndexedToolClient):
+            pass
+
+        chat2 = OllamaChat(
+            host="http://localhost:11434",
+            model="qwen3",
+            system_prompt="System",
+            client=IndexedToolClient2(),
+        )
+        async for chunk in chat2.send_message("time?", tool_registry=registry):
+            chunks.append(chunk)
+
+        tool_call_chunks = [c for c in chunks if c.kind == "tool_call"]
+        self.assertTrue(len(tool_call_chunks) >= 1)
+        self.assertEqual(tool_call_chunks[0].tool_index, 0)
+
     async def test_omits_unknown_kwargs_for_sdk_signature(self) -> None:
-        """If the SDK chat() does not accept think/tools, they are omitted and streaming works."""
+        """If the SDK chat() does not accept think/tools, they are omitted and streaming works.
+
+        The client still accepts ``options`` and ``**kwargs`` since real legacy
+        Ollama SDK versions have those but may lack ``think``/``tools``.
+        """
 
         class NoExtrasClient:
-            async def chat(self, model, messages, stream):  # noqa: D401, ANN001
+            async def chat(
+                self, model, messages, stream, options=None, **kwargs
+            ):  # noqa: D401, ANN001
                 return _chunk_stream([_content_chunk("OK")])
 
             async def list(self) -> dict[str, list[dict[str, str]]]:  # pragma: no cover
@@ -444,7 +565,9 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         # Even though we request think=True and provide tools, the client signature
         # does not accept these kwargs; the wrapper should drop them and still stream.
         chunks: list[ChatChunk] = []
-        async for chunk in chat.send_message("hello", think=True, tool_registry=registry):
+        async for chunk in chat.send_message(
+            "hello", think=True, tool_registry=registry
+        ):
             chunks.append(chunk)
 
         content = "".join(c.text for c in chunks if c.kind == "content")

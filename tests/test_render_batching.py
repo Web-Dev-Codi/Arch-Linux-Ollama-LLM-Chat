@@ -53,7 +53,9 @@ class _FakeChat:
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
 
-    async def send_message(self, user_message: str, **kwargs) -> AsyncGenerator:  # noqa: ARG002
+    async def send_message(
+        self, user_message: str, **kwargs
+    ) -> AsyncGenerator:  # noqa: ARG002
         from ollama_chat.chat import ChatChunk
 
         for chunk in self._chunks:
@@ -81,7 +83,9 @@ class _FakeApp:
     def _update_status_bar(self) -> None:
         return
 
-    async def _animate_response_placeholder(self, bubble: _FakeBubble) -> None:  # noqa: ARG002
+    async def _animate_response_placeholder(
+        self, bubble: _FakeBubble
+    ) -> None:  # noqa: ARG002
         """Stub: production version animates a placeholder until cancelled."""
         import asyncio
 

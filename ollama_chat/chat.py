@@ -47,6 +47,9 @@ class ChatChunk:
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
     tool_result: str = ""
+    # Index of the tool call within a parallel batch (from the API response).
+    # None for non-tool chunks or when the API does not include an index.
+    tool_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class OllamaChat:
         self.timeout = timeout
         self.retries = retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.max_context_tokens = max_context_tokens
 
         if client is not None:
             self._client = client
@@ -407,14 +411,27 @@ class OllamaChat:
         """Stream a single chat turn, yielding typed ChatChunk objects.
 
         Yields thinking, content, and tool_call chunks as they arrive.
+
+        ``num_ctx`` is always forwarded in ``options`` so that Ollama's
+        server-side context window matches the client-side trim budget.
+
+        GPT-OSS ignores boolean ``think`` values and requires a string level
+        (``"low"``/``"medium"``/``"high"``); this is detected by model name.
         """
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": request_messages,
             "stream": True,
+            # Align Ollama's context window with the client-side trim budget so
+            # longer histories aren't silently truncated server-side.
+            "options": {"num_ctx": self.max_context_tokens},
         }
         if think:
-            kwargs["think"] = True
+            # GPT-OSS ignores boolean think; send the string level instead.
+            if "gpt-oss" in self.model.lower():
+                kwargs["think"] = "medium"
+            else:
+                kwargs["think"] = True
         if tools:
             kwargs["tools"] = tools
 
@@ -439,21 +456,36 @@ class OllamaChat:
 
             chunk_tool_calls = self._extract_chunk_tool_calls(chunk)
             for tc in chunk_tool_calls:
-                name, args = self._parse_tool_call(tc)
+                name, args, index = self._parse_tool_call(tc)
                 if name:
-                    yield ChatChunk(kind="tool_call", tool_name=name, tool_args=args)
+                    yield ChatChunk(
+                        kind="tool_call",
+                        tool_name=name,
+                        tool_args=args,
+                        tool_index=index,
+                    )
 
     @staticmethod
-    def _parse_tool_call(tc: Any) -> tuple[str, dict[str, Any]]:
-        """Extract (name, arguments) from a tool call object or dict."""
-        # SDK object: tc.function.name / tc.function.arguments
+    def _parse_tool_call(tc: Any) -> tuple[str, dict[str, Any], int | None]:
+        """Extract (name, arguments, index) from a tool call object or dict.
+
+        The ``index`` field is present in parallel tool-call responses and is
+        needed to correctly correlate tool results with their originating call
+        when sending the follow-up request.  Returns ``None`` when absent.
+        """
+        # SDK object: tc.function.name / tc.function.arguments / tc.function.index
         fn = getattr(tc, "function", None)
         if fn is not None:
             name = getattr(fn, "name", None) or ""
             args = getattr(fn, "arguments", None) or {}
             if not isinstance(args, dict):
                 args = {}
-            return str(name), args
+            raw_index = getattr(fn, "index", None)
+            try:
+                index: int | None = int(raw_index) if raw_index is not None else None
+            except (TypeError, ValueError):
+                index = None
+            return str(name), args, index
 
         # Dict-based fallback
         if isinstance(tc, dict):
@@ -463,8 +495,13 @@ class OllamaChat:
                 args = fn_dict.get("arguments", {})
                 if not isinstance(args, dict):
                     args = {}
-                return name, args
-        return "", {}
+                raw_index = fn_dict.get("index")
+                try:
+                    index = int(raw_index) if raw_index is not None else None
+                except (TypeError, ValueError):
+                    index = None
+                return name, args, index
+        return "", {}, None
 
     async def send_message(
         self,
@@ -534,7 +571,11 @@ class OllamaChat:
                                 yield chunk
                             elif chunk.kind == "tool_call":
                                 accumulated_tool_calls.append(
-                                    {"name": chunk.tool_name, "args": chunk.tool_args}
+                                    {
+                                        "name": chunk.tool_name,
+                                        "args": chunk.tool_args,
+                                        "index": chunk.tool_index,
+                                    }
                                 )
                                 yield chunk
                         break
@@ -568,16 +609,24 @@ class OllamaChat:
 
                 # Append the assistant turn (with tool calls) to the request context.
                 # accumulated_tool_calls is non-empty here (checked above).
+                # The index field is preserved from the API response so that
+                # parallel tool call batches are correctly correlated when
+                # sending follow-up requests.
+                tool_call_entries: list[dict[str, Any]] = []
+                for seq, tc in enumerate(accumulated_tool_calls):
+                    fn_entry: dict[str, Any] = {
+                        "name": tc["name"],
+                        "arguments": tc["args"],
+                    }
+                    # Use the API-provided index when available; fall back to
+                    # sequential position so the field is always present.
+                    fn_entry["index"] = tc["index"] if tc["index"] is not None else seq
+                    tool_call_entries.append({"type": "function", "function": fn_entry})
+
                 assistant_turn: dict[str, Any] = {
                     "role": "assistant",
                     "content": accumulated_content,
-                    "tool_calls": [
-                        {
-                            "type": "function",
-                            "function": {"name": tc["name"], "arguments": tc["args"]},
-                        }
-                        for tc in accumulated_tool_calls
-                    ],
+                    "tool_calls": tool_call_entries,
                 }
                 if accumulated_thinking:
                     assistant_turn["thinking"] = accumulated_thinking

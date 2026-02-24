@@ -8,27 +8,48 @@ from typing import Any
 
 @dataclass
 class CapabilityContext:
-    """Immutable snapshot of all model capability flags from config."""
+    """Effective runtime capability snapshot for the active model.
 
+    The three auto-detected fields (``think``, ``tools_enabled``,
+    ``vision_enabled``) are **not** read from the config file — they are
+    computed by intersecting Ollama's ``/api/show`` response with what the
+    model actually supports.  When capability metadata is unavailable
+    (``known=False``), all three default to ``True`` (permissive fallback).
+
+    The remaining fields come from the ``[capabilities]`` config section and
+    represent pure user / app preferences that have no model-side equivalent.
+    """
+
+    # Auto-detected from /api/show (not configurable).
     think: bool = True
-    show_thinking: bool = True
     tools_enabled: bool = True
+    vision_enabled: bool = True
+
+    # User / app preferences from [capabilities] config.
+    show_thinking: bool = True
     web_search_enabled: bool = False
     web_search_api_key: str = ""
-    vision_enabled: bool = True
     max_tool_iterations: int = 10
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> CapabilityContext:
-        """Build a CapabilityContext from the [capabilities] config section."""
+        """Build a CapabilityContext from the [capabilities] config section.
+
+        Only the user-preference fields are read from config.  The
+        auto-detected fields (``think``, ``tools_enabled``, ``vision_enabled``)
+        are left at their permissive defaults (``True``) and will be updated
+        by ``_update_effective_caps()`` once ``/api/show`` returns.
+        """
         cap_cfg = config.get("capabilities", {})
         return cls(
-            think=bool(cap_cfg.get("think", True)),
+            # Auto-detected fields: always start permissive.
+            think=True,
+            tools_enabled=True,
+            vision_enabled=True,
+            # User / app preferences from config.
             show_thinking=bool(cap_cfg.get("show_thinking", True)),
-            tools_enabled=bool(cap_cfg.get("tools_enabled", True)),
             web_search_enabled=bool(cap_cfg.get("web_search_enabled", False)),
             web_search_api_key=str(cap_cfg.get("web_search_api_key", "")),
-            vision_enabled=bool(cap_cfg.get("vision_enabled", True)),
             max_tool_iterations=int(cap_cfg.get("max_tool_iterations", 10)),
         )
 

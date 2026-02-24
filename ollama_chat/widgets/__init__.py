@@ -7,4 +7,11 @@ from .input_box import InputBox
 from .message import MessageBubble
 from .status_bar import StatusBar
 
-__all__ = ["ActivityBar", "CodeBlock", "ConversationView", "InputBox", "MessageBubble", "StatusBar"]
+__all__ = [
+    "ActivityBar",
+    "CodeBlock",
+    "ConversationView",
+    "InputBox",
+    "MessageBubble",
+    "StatusBar",
+]

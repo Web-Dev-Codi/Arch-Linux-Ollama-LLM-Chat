@@ -504,27 +504,34 @@ class OllamaChatApp(App[None]):
             caps=frozenset(), known=False
         )
 
-        # Effective capabilities = intersection of user config + model's actual support.
-        # Populated after every ensure_model_ready(); defaults to config until then.
-        self._effective_caps: CapabilityContext = self.capabilities
+        # Effective capabilities start permissive (all auto-detected fields = True)
+        # and are refined once ensure_model_ready() returns /api/show data.
+        self._effective_caps: CapabilityContext = CapabilityContext(
+            think=True,
+            tools_enabled=True,
+            vision_enabled=True,
+            show_thinking=self.capabilities.show_thinking,
+            web_search_enabled=self.capabilities.web_search_enabled,
+            web_search_api_key=self.capabilities.web_search_api_key,
+            max_tool_iterations=self.capabilities.max_tool_iterations,
+        )
 
-        # Build the tool registry based on capabilities.
-        if self.capabilities.tools_enabled:
-            try:
-                self._tool_registry: ToolRegistry | None = build_default_registry(
-                    web_search_enabled=self.capabilities.web_search_enabled,
-                    web_search_api_key=self.capabilities.web_search_api_key,
-                )
-            except OllamaToolError as exc:
-                LOGGER.warning(
-                    "app.tools.disabled",
-                    extra={
-                        "event": "app.tools.disabled",
-                        "reason": str(exc),
-                    },
-                )
-                self._tool_registry = None
-        else:
+        # Build the tool registry unconditionally — whether tools are actually
+        # used is gated at call time by _effective_caps.tools_enabled.  This
+        # ensures the registry is ready when the first tool-capable model loads.
+        try:
+            self._tool_registry: ToolRegistry | None = build_default_registry(
+                web_search_enabled=self.capabilities.web_search_enabled,
+                web_search_api_key=self.capabilities.web_search_api_key,
+            )
+        except OllamaToolError as exc:
+            LOGGER.warning(
+                "app.tools.disabled",
+                extra={
+                    "event": "app.tools.disabled",
+                    "reason": str(exc),
+                },
+            )
             self._tool_registry = None
 
         persistence_cfg = self.config["persistence"]
@@ -865,63 +872,66 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Model preparation failed."
 
     def _update_effective_caps(self) -> None:
-        """Recompute _effective_caps from user config AND model-reported capabilities.
+        """Recompute _effective_caps purely from Ollama's /api/show response.
 
-        When capability metadata is unknown (show() unavailable or returned no
-        capability field), the user's config flags are used unchanged — permissive
-        fallback that preserves existing behaviour for older Ollama versions and
-        custom models.
+        The three model-capability fields (``think``, ``tools_enabled``,
+        ``vision_enabled``) are set **solely** by auto-detection — there are no
+        longer config flags for them.  User preferences (``show_thinking``,
+        ``web_search_*``, ``max_tool_iterations``) are always taken from
+        ``self.capabilities`` which is loaded from the ``[capabilities]`` config
+        section.
 
-        When capability metadata is known, the app intersects config flags with the
-        model's reported capabilities: a feature is active only if the user *wants*
-        it (config) **and** the model *supports* it (Ollama's /api/show response).
-        This prevents 400 errors from sending e.g. ``tools=[...]`` to a model that
-        doesn't understand tool-calling, and avoids models that don't support tools
-        emitting tool-call JSON into the normal assistant reply.
+        When capability metadata is unknown (``show()`` unavailable or the
+        response has no ``capabilities`` field — old Ollama versions, custom
+        models), all three auto-detected fields default to ``True`` (permissive
+        fallback) so that nothing is silently disabled.
+
+        When metadata is known, each field is set to ``True`` only when the
+        model explicitly reports that capability in its ``capabilities`` array.
+        ``web_search`` additionally requires the model to support tools.
         """
         if not self._model_caps.known:
-            # Unknown capabilities — fall back to user config unchanged.
-            self._effective_caps = self.capabilities
+            # Unknown — permissive fallback: assume everything is supported.
+            self._effective_caps = CapabilityContext(
+                think=True,
+                tools_enabled=True,
+                vision_enabled=True,
+                show_thinking=self.capabilities.show_thinking,
+                web_search_enabled=self.capabilities.web_search_enabled,
+                web_search_api_key=self.capabilities.web_search_api_key,
+                max_tool_iterations=self.capabilities.max_tool_iterations,
+            )
             return
 
         caps = self._model_caps.caps
+        tools_supported = "tools" in caps
 
         self._effective_caps = CapabilityContext(
-            think=self.capabilities.think and "thinking" in caps,
+            # Auto-detected from /api/show.
+            think="thinking" in caps,
+            tools_enabled=tools_supported,
+            # web_search requires tool-calling; disable when model can't do tools.
+            vision_enabled="vision" in caps,
+            # User / app preferences — always from config.
             show_thinking=self.capabilities.show_thinking,
-            tools_enabled=self.capabilities.tools_enabled and "tools" in caps,
-            # web_search requires tool-calling; disable it when the model can't do tools.
-            web_search_enabled=(
-                self.capabilities.web_search_enabled and "tools" in caps
-            ),
+            web_search_enabled=self.capabilities.web_search_enabled and tools_supported,
             web_search_api_key=self.capabilities.web_search_api_key,
-            vision_enabled=self.capabilities.vision_enabled and "vision" in caps,
             max_tool_iterations=self.capabilities.max_tool_iterations,
         )
 
-        # Log any features silently downgraded due to model limitations.
-        downgrades = [
-            (
-                self.capabilities.tools_enabled,
-                self._effective_caps.tools_enabled,
-                "tools",
-            ),
-            (self.capabilities.think, self._effective_caps.think, "thinking"),
-            (
-                self.capabilities.vision_enabled,
-                self._effective_caps.vision_enabled,
-                "vision",
-            ),
-        ]
-        for wanted, got, name in downgrades:
-            if wanted and not got:
+        # Log which capabilities this model does not support.
+        for enabled, feature in [
+            (self._effective_caps.think, "thinking"),
+            (self._effective_caps.tools_enabled, "tools"),
+            (self._effective_caps.vision_enabled, "vision"),
+        ]:
+            if not enabled:
                 LOGGER.info(
-                    "app.capability.downgrade",
+                    "app.capability.not_supported",
                     extra={
-                        "event": "app.capability.downgrade",
-                        "feature": name,
+                        "event": "app.capability.not_supported",
+                        "feature": feature,
                         "model": self.chat.model,
-                        "reason": "model does not report this capability",
                     },
                 )
 
@@ -1051,28 +1061,21 @@ class OllamaChatApp(App[None]):
             self._model_caps = await self.chat.show_model_capabilities(model_name)
             self._update_effective_caps()
 
-            # Build a subtitle that tells the user which config features were disabled
-            # because this model doesn't support them.
-            downgraded = [
+            # Build a subtitle reporting which capabilities this model lacks.
+            # Since auto-detection is now the sole authority, we report what
+            # /api/show told us rather than comparing against removed config flags.
+            unsupported = [
                 cap
-                for wanted, now, cap in [
-                    (
-                        self.capabilities.tools_enabled,
-                        self._effective_caps.tools_enabled,
-                        "tools",
-                    ),
-                    (self.capabilities.think, self._effective_caps.think, "thinking"),
-                    (
-                        self.capabilities.vision_enabled,
-                        self._effective_caps.vision_enabled,
-                        "vision",
-                    ),
+                for enabled, cap in [
+                    (self._effective_caps.think, "thinking"),
+                    (self._effective_caps.tools_enabled, "tools"),
+                    (self._effective_caps.vision_enabled, "vision"),
                 ]
-                if wanted and not now
+                if not enabled
             ]
             msg = f"Active model: {model_name}"
-            if downgraded:
-                msg += f"  |  Disabled (not supported): {', '.join(downgraded)}"
+            if unsupported and self._model_caps.known:
+                msg += f"  |  Not supported: {', '.join(unsupported)}"
             self._set_idle_sub_title(msg)
         except OllamaChatError as exc:  # noqa: BLE001
             self.chat.set_model(previous_model)

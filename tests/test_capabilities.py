@@ -11,34 +11,42 @@ class CapabilityContextTests(unittest.TestCase):
     """Validate CapabilityContext.from_config() and safe defaults."""
 
     def test_from_config_maps_all_keys(self) -> None:
+        """Only the user-preference fields are read from config; auto-detected
+        fields (think, tools_enabled, vision_enabled) always start True."""
         config = {
             "capabilities": {
+                # These were removed from config — they must be ignored.
                 "think": False,
-                "show_thinking": False,
                 "tools_enabled": False,
+                "vision_enabled": False,
+                # These are still configurable.
+                "show_thinking": False,
                 "web_search_enabled": True,
                 "web_search_api_key": "sk-test-123",
-                "vision_enabled": False,
                 "max_tool_iterations": 5,
             }
         }
         ctx = CapabilityContext.from_config(config)
-        self.assertFalse(ctx.think)
+        # Auto-detected fields are always permissive (True) after from_config().
+        self.assertTrue(ctx.think)
+        self.assertTrue(ctx.tools_enabled)
+        self.assertTrue(ctx.vision_enabled)
+        # User-preference fields come from config.
         self.assertFalse(ctx.show_thinking)
-        self.assertFalse(ctx.tools_enabled)
         self.assertTrue(ctx.web_search_enabled)
         self.assertEqual(ctx.web_search_api_key, "sk-test-123")
-        self.assertFalse(ctx.vision_enabled)
         self.assertEqual(ctx.max_tool_iterations, 5)
 
     def test_defaults_when_config_keys_absent(self) -> None:
         ctx = CapabilityContext.from_config({})
+        # Auto-detected fields default to True (permissive).
         self.assertTrue(ctx.think)
-        self.assertTrue(ctx.show_thinking)
         self.assertTrue(ctx.tools_enabled)
+        self.assertTrue(ctx.vision_enabled)
+        # User-preference fields use their own defaults.
+        self.assertTrue(ctx.show_thinking)
         self.assertFalse(ctx.web_search_enabled)
         self.assertEqual(ctx.web_search_api_key, "")
-        self.assertTrue(ctx.vision_enabled)
         self.assertEqual(ctx.max_tool_iterations, 10)
 
     def test_defaults_with_empty_capabilities_section(self) -> None:
@@ -48,12 +56,19 @@ class CapabilityContextTests(unittest.TestCase):
         self.assertEqual(ctx.max_tool_iterations, 10)
 
     def test_partial_config_uses_defaults_for_missing(self) -> None:
-        config = {"capabilities": {"think": False, "vision_enabled": False}}
+        """Supplying only some configurable fields leaves others at their defaults."""
+        config = {"capabilities": {"show_thinking": False, "max_tool_iterations": 3}}
         ctx = CapabilityContext.from_config(config)
-        self.assertFalse(ctx.think)
-        self.assertFalse(ctx.vision_enabled)
+        # Auto-detected fields: always True from from_config().
+        self.assertTrue(ctx.think)
+        self.assertTrue(ctx.vision_enabled)
         self.assertTrue(ctx.tools_enabled)
-        self.assertEqual(ctx.max_tool_iterations, 10)
+        # Configured fields.
+        self.assertFalse(ctx.show_thinking)
+        self.assertEqual(ctx.max_tool_iterations, 3)
+        # Unconfigured fields use defaults.
+        self.assertFalse(ctx.web_search_enabled)
+        self.assertEqual(ctx.web_search_api_key, "")
 
 
 class SearchStateTests(unittest.TestCase):

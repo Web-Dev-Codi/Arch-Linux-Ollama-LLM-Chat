@@ -277,14 +277,21 @@ class PersistenceConfig(BaseModel):
 
 
 class CapabilitiesConfig(BaseModel):
-    """Extended model capability flags for thinking, tools, web search, and vision."""
+    """User-facing feature preferences for thinking, tools, web search, and vision.
 
-    think: bool = True
+    Model capability detection (thinking / tools / vision support) is handled
+    automatically via Ollama's ``/api/show`` endpoint.  The flags that used to
+    live here (``think``, ``tools_enabled``, ``vision_enabled``) have been
+    removed: auto-detection is now the sole authority for those three.
+
+    The remaining fields are either UI preferences (``show_thinking``), app-level
+    configuration (``web_search_*``), or behavioural limits
+    (``max_tool_iterations``) that have no model-side equivalent.
+    """
+
     show_thinking: bool = True
-    tools_enabled: bool = True
     web_search_enabled: bool = False
     web_search_api_key: str = ""
-    vision_enabled: bool = True
     max_tool_iterations: int = Field(default=10, ge=1, le=100)
 
     @field_validator("web_search_api_key", mode="before")

@@ -11,7 +11,10 @@ from .config import ensure_config_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ollamaterm", description="OllamaTerm - Terminal chat interface for local Ollama models")
+    parser = argparse.ArgumentParser(
+        prog="ollamaterm",
+        description="OllamaTerm - Terminal chat interface for local Ollama models",
+    )
     parser.add_argument(
         "--version",
         action="store_true",

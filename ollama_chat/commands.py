@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import os
 import re
 
-
 _IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
 _FILE_PREFIX_RE = re.compile(r"(?:^|\s)/file\s+(\S+)")
 
