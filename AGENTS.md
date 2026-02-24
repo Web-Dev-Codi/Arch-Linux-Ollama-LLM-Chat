@@ -7,7 +7,7 @@ developers working in this repository.
 
 ## Project Overview
 
-**ollama-chat-tui** is a terminal UI chat application built on
+**OllamTerm** is a terminal UI chat application built on
 [Textual](https://github.com/Textualize/textual) that connects to a locally
 running [Ollama](https://ollama.com/) instance. Key design goals are async
 streaming with batched rendering, a lock-protected state machine, Pydantic
@@ -32,7 +32,7 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 
 # Run the application
-ollama-chat
+ollamaterm
 # or
 python -m ollama_chat
 ```

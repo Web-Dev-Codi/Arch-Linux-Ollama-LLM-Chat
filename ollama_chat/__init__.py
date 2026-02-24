@@ -1,4 +1,4 @@
-"""Top-level package for ollama-chat-tui."""
+"""Top-level package for ollamaterm."""
 
 from __future__ import annotations
 

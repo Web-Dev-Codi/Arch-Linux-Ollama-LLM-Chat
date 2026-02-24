@@ -77,7 +77,7 @@ def configure_logging(logging_config: dict[str, Any]) -> None:
     structured = bool(logging_config.get("structured", True))
     log_to_file = bool(logging_config.get("log_to_file", False))
     log_file_path = str(
-        logging_config.get("log_file_path", "~/.local/state/ollama-chat/app.log")
+        logging_config.get("log_file_path", "~/.local/state/ollamaterm/app.log")
     )
 
     root = logging.getLogger()

@@ -44,12 +44,12 @@ allowed_hosts = ["localhost", "127.0.0.1", "::1"]
 level = "INFO"
 structured = true
 log_to_file = false
-log_file_path = "~/.local/state/ollama-chat/app.log"
+log_file_path = "~/.local/state/ollamaterm/app.log"
 
 [persistence]
 enabled = false
-directory = "~/.local/state/ollama-chat/conversations"
-metadata_path = "~/.local/state/ollama-chat/conversations/index.json"
+directory = "~/.local/state/ollamaterm/conversations"
+metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
 [capabilities]
 # Enable chain-of-thought reasoning (think=True in API call).

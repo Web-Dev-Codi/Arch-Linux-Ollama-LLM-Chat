@@ -1,4 +1,4 @@
-pkgname=ollama-chat-tui
+pkgname=ollamaterm
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='ChatGPT-style TUI for Ollama local LLMs'
