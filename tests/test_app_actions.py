@@ -73,9 +73,7 @@ class _FakeChat:
     async def list_models(self) -> list[str]:
         return ["llama3.2", "qwen2.5"]
 
-    async def ensure_model_ready(
-        self, pull_if_missing: bool = True
-    ) -> bool:  # noqa: ARG002
+    async def ensure_model_ready(self, pull_if_missing: bool = True) -> bool:  # noqa: ARG002
         return True
 
     async def check_connection(self) -> bool:
@@ -123,9 +121,7 @@ class _FakePersistence:
             ],
         }
 
-    def export_markdown(
-        self, messages: list[dict[str, str]], model: str
-    ) -> str:  # noqa: ARG002
+    def export_markdown(self, messages: list[dict[str, str]], model: str) -> str:  # noqa: ARG002
         self.exported = True
         return "/tmp/conv.md"
 
@@ -136,6 +132,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         assert OllamaChatApp is not None
+
         async def _no_prompt(self) -> str:  # noqa: ANN001
             return ""
 
@@ -152,6 +149,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
                 "action_toggle_model_picker": OllamaChatApp.action_toggle_model_picker,
                 "action_save_conversation": OllamaChatApp.action_save_conversation,
                 "action_load_conversation": OllamaChatApp.action_load_conversation,
+                "_load_conversation_payload": OllamaChatApp._load_conversation_payload,
                 "action_export_conversation": OllamaChatApp.action_export_conversation,
                 "action_search_messages": OllamaChatApp.action_search_messages,
                 "action_copy_last_message": OllamaChatApp.action_copy_last_message,
@@ -166,6 +164,7 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         from ollama_chat.state import ConnectionState
         from ollama_chat.capabilities import AttachmentState, SearchState
         from ollama_chat.task_manager import TaskManager
+
         self.app._task_manager = TaskManager()
         self.app._connection_state = ConnectionState.ONLINE
         self.app._search = SearchState()

@@ -391,6 +391,10 @@ class OllamaChat:
         image attachments for vision-capable models.
 
         Images are passed to the API but are NOT stored in conversation history.
+
+        If streaming fails after the user message has been appended to history,
+        the user message is rolled back to prevent consecutive user messages from
+        corrupting the API context on the next call.
         """
         normalized = user_message.strip()
         if not normalized and not images:
@@ -421,108 +425,129 @@ class OllamaChat:
         accumulated_content = ""
         accumulated_tool_calls: list[dict[str, Any]] = []
 
-        for iteration in range(max_tool_iterations):
-            for attempt in range(self.retries + 1):
-                try:
-                    async for chunk in self._stream_once_with_capabilities(
-                        request_messages, tools, think
-                    ):
-                        if chunk.kind == "thinking":
-                            accumulated_thinking += chunk.text
-                            yield chunk
-                        elif chunk.kind == "content":
-                            accumulated_content += chunk.text
-                            yield chunk
-                        elif chunk.kind == "tool_call":
-                            accumulated_tool_calls.append(
-                                {"name": chunk.tool_name, "args": chunk.tool_args}
-                            )
-                            yield chunk
+        # Track the most-recent iteration's content so that if max_tool_iterations
+        # is exhausted (loop ends without a clean break), we can still persist the
+        # last streamed content rather than an empty string.
+        _last_iteration_content = ""
+
+        try:
+            for iteration in range(max_tool_iterations):
+                for attempt in range(self.retries + 1):
+                    try:
+                        async for chunk in self._stream_once_with_capabilities(
+                            request_messages, tools, think
+                        ):
+                            if chunk.kind == "thinking":
+                                accumulated_thinking += chunk.text
+                                yield chunk
+                            elif chunk.kind == "content":
+                                accumulated_content += chunk.text
+                                yield chunk
+                            elif chunk.kind == "tool_call":
+                                accumulated_tool_calls.append(
+                                    {"name": chunk.tool_name, "args": chunk.tool_args}
+                                )
+                                yield chunk
+                        break
+                    except asyncio.CancelledError:
+                        LOGGER.info(
+                            "chat.request.cancelled",
+                            extra={"event": "chat.request.cancelled"},
+                        )
+                        raise
+                    except OllamaToolError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - external API can fail in many ways.
+                        mapped_exc = self._map_exception(exc)
+                        LOGGER.warning(
+                            "chat.request.retry",
+                            extra={
+                                "event": "chat.request.retry",
+                                "attempt": attempt + 1,
+                                "error_type": mapped_exc.__class__.__name__,
+                            },
+                        )
+                        if attempt >= self.retries:
+                            raise mapped_exc from exc
+                        await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+
+                # If no tool calls, the agent loop is complete.
+                if not accumulated_tool_calls:
                     break
-                except asyncio.CancelledError:
+
+                # Append the assistant turn (with tool calls) to the request context.
+                # accumulated_tool_calls is non-empty here (checked above).
+                assistant_turn: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": accumulated_content,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {"name": tc["name"], "arguments": tc["args"]},
+                        }
+                        for tc in accumulated_tool_calls
+                    ],
+                }
+                if accumulated_thinking:
+                    assistant_turn["thinking"] = accumulated_thinking
+                request_messages.append(assistant_turn)
+
+                # Execute each tool call off the event loop to avoid blocking the TUI.
+                for tc in accumulated_tool_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc["args"]
                     LOGGER.info(
-                        "chat.request.cancelled",
-                        extra={"event": "chat.request.cancelled"},
-                    )
-                    raise
-                except OllamaToolError:
-                    raise
-                except (
-                    Exception
-                ) as exc:  # noqa: BLE001 - external API can fail in many ways.
-                    mapped_exc = self._map_exception(exc)
-                    LOGGER.warning(
-                        "chat.request.retry",
+                        "chat.tool.call",
                         extra={
-                            "event": "chat.request.retry",
-                            "attempt": attempt + 1,
-                            "error_type": mapped_exc.__class__.__name__,
-                        },
-                    )
-                    if attempt >= self.retries:
-                        raise mapped_exc from exc
-                    await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
-
-            # If no tool calls, the agent loop is complete.
-            if not accumulated_tool_calls:
-                break
-
-            # Append the assistant turn (with tool calls) to the request context.
-            # accumulated_tool_calls is non-empty here (checked above).
-            assistant_turn: dict[str, Any] = {
-                "role": "assistant",
-                "content": accumulated_content,
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["args"]},
-                    }
-                    for tc in accumulated_tool_calls
-                ],
-            }
-            if accumulated_thinking:
-                assistant_turn["thinking"] = accumulated_thinking
-            request_messages.append(assistant_turn)
-
-            # Execute each tool call and append results.
-            for tc in accumulated_tool_calls:
-                tool_name = tc["name"]
-                tool_args = tc["args"]
-                LOGGER.info(
-                    "chat.tool.call",
-                    extra={
-                        "event": "chat.tool.call",
-                        "tool": tool_name,
-                        "iteration": iteration + 1,
-                    },
-                )
-                try:
-                    result = tool_registry.execute(tool_name, tool_args)  # type: ignore[union-attr]
-                except OllamaToolError as exc:
-                    result = f"[Tool error: {exc}]"
-                    LOGGER.warning(
-                        "chat.tool.error",
-                        extra={
-                            "event": "chat.tool.error",
+                            "event": "chat.tool.call",
                             "tool": tool_name,
-                            "error": str(exc),
+                            "iteration": iteration + 1,
                         },
                     )
-                yield ChatChunk(
-                    kind="tool_result",
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                    tool_result=result,
-                )
-                request_messages.append(
-                    {"role": "tool", "tool_name": tool_name, "content": result}
-                )
+                    try:
+                        result = await asyncio.to_thread(
+                            tool_registry.execute,
+                            tool_name,
+                            tool_args,  # type: ignore[union-attr]
+                        )
+                    except OllamaToolError as exc:
+                        result = f"[Tool error: {exc}]"
+                        LOGGER.warning(
+                            "chat.tool.error",
+                            extra={
+                                "event": "chat.tool.error",
+                                "tool": tool_name,
+                                "error": str(exc),
+                            },
+                        )
+                    yield ChatChunk(
+                        kind="tool_result",
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        tool_result=result,
+                    )
+                    request_messages.append(
+                        {"role": "tool", "tool_name": tool_name, "content": result}
+                    )
 
-            # Reset for next iteration, preserving only accumulated_content for history.
-            accumulated_thinking = ""
-            accumulated_content = ""
-            accumulated_tool_calls = []
+                # Save content before reset so it's available if the loop exhausts.
+                _last_iteration_content = accumulated_content
+
+                # Reset accumulators for the next agent-loop iteration.
+                accumulated_thinking = ""
+                accumulated_content = ""
+                accumulated_tool_calls = []
+
+        except BaseException:
+            # On any failure (cancellation, network error, tool error) roll back
+            # the user message that was already appended so that the history does
+            # not end with an unanswered user turn.  The next call to send_message
+            # would otherwise send two consecutive user messages to the API.
+            self.message_store.rollback_last_user_append()
+            raise
 
         # Persist the final assistant response (text only) to history.
-        final_response = accumulated_content.strip()
+        # If the loop was exhausted (all iterations had tool calls), fall back to
+        # the last content that was streamed to the UI but then reset.
+        final_response = (accumulated_content or _last_iteration_content).strip()
         self.message_store.append("assistant", final_response)

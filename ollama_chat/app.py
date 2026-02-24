@@ -56,6 +56,12 @@ from .widgets.status_bar import StatusBar
 
 LOGGER = logging.getLogger(__name__)
 
+# Image file extensions accepted for vision attachments.
+# Single source of truth — referenced by validation, dialog filter, and paste handler.
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+)
+
 _STREAM_ERROR_MESSAGES: dict[type, tuple[str, str]] = {
     OllamaToolError: ("Tool error: {exc}", "Tool execution error"),
     OllamaConnectionError: ("Connection error: {exc}", "Connection error"),
@@ -110,9 +116,7 @@ async def _open_native_file_dialog(
                     for token in output.split():
                         cleaned = token.strip("',()><[]")
                         if cleaned.startswith("file://"):
-                            return urllib.parse.unquote(
-                                cleaned[len("file://") :]
-                            )
+                            return urllib.parse.unquote(cleaned[len("file://") :])
         except (asyncio.TimeoutError, OSError):
             pass
 
@@ -142,9 +146,7 @@ async def _open_native_file_dialog(
     if kdialog_bin is not None:
         cmd = [kdialog_bin, "--getopenfilename", ".", title]
         if file_filter:
-            filter_str = " ".join(
-                p for _, patterns in file_filter for p in patterns
-            )
+            filter_str = " ".join(p for _, patterns in file_filter for p in patterns)
             cmd = [kdialog_bin, "--getopenfilename", ".", filter_str]
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -270,6 +272,7 @@ class ModelPickerScreen(ModalScreen[str | None]):
             selected_index = -1
         if 0 <= selected_index < len(self.models):
             self.dismiss(self.models[selected_index])
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -396,24 +399,6 @@ class OllamaChatApp(App[None]):
         "interrupt_stream": "Interrupt",
     }
 
-    KEY_TO_ACTION: dict[str, str] = {
-        "send_message": "send_message",
-        "new_conversation": "new_conversation",
-        "quit": "quit",
-        "scroll_up": "scroll_up",
-        "scroll_down": "scroll_down",
-        "command_palette": "command_palette",
-        "toggle_model_picker": "toggle_model_picker",
-        "save_conversation": "save_conversation",
-        "load_conversation": "load_conversation",
-        "export_conversation": "export_conversation",
-        "search_messages": "search_messages",
-        "copy_last_message": "copy_last_message",
-        "toggle_conversation_picker": "toggle_conversation_picker",
-        "toggle_prompt_preset_picker": "toggle_prompt_preset_picker",
-        "interrupt_stream": "interrupt_stream",
-    }
-
     RESPONSE_PLACEHOLDER_FRAMES: tuple[str, ...] = (
         "🤖 Warming up the tiny token factory...",
         "🧠 Reassembling thoughts into words...",
@@ -449,8 +434,13 @@ class OllamaChatApp(App[None]):
             if str(item).strip()
         }
         if scheme not in {"http", "https"} or not hostname:
-            raise OllamaConnectionError("ollama.host must use http(s) and include a hostname.")
-        if not bool(security_cfg.get("allow_remote_hosts", False)) and hostname not in allowed_hosts:
+            raise OllamaConnectionError(
+                "ollama.host must use http(s) and include a hostname."
+            )
+        if (
+            not bool(security_cfg.get("allow_remote_hosts", False))
+            and hostname not in allowed_hosts
+        ):
             raise OllamaConnectionError(
                 "ollama.host is not allowed by security policy. "
                 "Set security.allow_remote_hosts=true or add the hostname to security.allowed_hosts."
@@ -470,8 +460,12 @@ class OllamaChatApp(App[None]):
             max_history_messages=int(ollama_cfg["max_history_messages"]),
             max_context_tokens=int(ollama_cfg["max_context_tokens"]),
         )
-        self._prompt_presets: dict[str, str] = dict(ollama_cfg.get("prompt_presets") or {})
-        self._active_prompt_preset: str = str(ollama_cfg.get("active_prompt_preset") or "").strip()
+        self._prompt_presets: dict[str, str] = dict(
+            ollama_cfg.get("prompt_presets") or {}
+        )
+        self._active_prompt_preset: str = str(
+            ollama_cfg.get("active_prompt_preset") or ""
+        ).strip()
         self.state = StateManager()
         self._task_manager = TaskManager()
         self._connection_state = ConnectionState.UNKNOWN
@@ -479,6 +473,16 @@ class OllamaChatApp(App[None]):
         self._attachments = AttachmentState()
         self._image_dialog_active = False
         self._last_prompt: str = ""
+
+        # Cached widget references — populated in on_mount() after compose().
+        # Using cached refs avoids repeated O(widget-tree) query_one() calls in
+        # hot paths (every send, every connection-monitor tick, every keystroke).
+        self._w_input: Input | None = None
+        self._w_send: Button | None = None
+        self._w_file: Button | None = None
+        self._w_activity: ActivityBar | None = None
+        self._w_status: StatusBar | None = None
+        self._w_conversation: ConversationView | None = None
 
         self._slash_commands: list[tuple[str, str]] = [
             ("/image <path>", "Attach image from filesystem"),
@@ -528,14 +532,19 @@ class OllamaChatApp(App[None]):
     def _load_last_prompt(self) -> None:
         try:
             if self._last_prompt_path.exists():
-                self._last_prompt = self._last_prompt_path.read_text(encoding="utf-8").strip()
+                self._last_prompt = self._last_prompt_path.read_text(
+                    encoding="utf-8"
+                ).strip()
         except Exception:
             self._last_prompt = ""
 
-    def _save_last_prompt(self, prompt: str) -> None:
+    async def _save_last_prompt(self, prompt: str) -> None:
+        """Persist the last prompt asynchronously to avoid blocking the event loop."""
         try:
             self._last_prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            self._last_prompt_path.write_text(prompt, encoding="utf-8")
+            await asyncio.to_thread(
+                self._last_prompt_path.write_text, prompt, encoding="utf-8"
+            )
         except Exception:
             LOGGER.warning(
                 "app.last_prompt.save_failed",
@@ -548,16 +557,16 @@ class OllamaChatApp(App[None]):
     ) -> list[Binding]:
         keybinds = config.get("keybinds", {})
         bindings: list[Binding] = []
-        for key, action_name in cls.KEY_TO_ACTION.items():
-            binding_key = keybinds.get(key)
+        # Iterate over the canonical action descriptions; KEY_TO_ACTION was a
+        # redundant identity map (every key mapped to itself) and has been removed.
+        for action_name in cls.DEFAULT_ACTION_DESCRIPTIONS:
+            binding_key = keybinds.get(action_name)
             if isinstance(binding_key, str) and binding_key.strip():
                 bindings.append(
                     Binding(
                         key=binding_key.strip(),
                         action=action_name,
-                        description=cls.DEFAULT_ACTION_DESCRIPTIONS.get(
-                            key, action_name
-                        ),
+                        description=cls.DEFAULT_ACTION_DESCRIPTIONS[action_name],
                         show=True,
                     )
                 )
@@ -672,7 +681,9 @@ class OllamaChatApp(App[None]):
         lines.append("")
         lines.append("Keybind actions:")
         for binding in self._binding_specs:
-            lines.append(f"{binding.key.upper()} - {binding.description} ({binding.action})")
+            lines.append(
+                f"{binding.key.upper()} - {binding.description} ({binding.action})"
+            )
         await self.push_screen(InfoScreen("\n".join(lines)))
 
     async def action_toggle_conversation_picker(self) -> None:
@@ -701,7 +712,9 @@ class OllamaChatApp(App[None]):
             self.sub_title = "No prompt presets configured."
             return
         options = sorted(self._prompt_presets.keys())
-        selected = await self.push_screen_wait(SimplePickerScreen("Prompt Presets", options))
+        selected = await self.push_screen_wait(
+            SimplePickerScreen("Prompt Presets", options)
+        )
         if not selected:
             return
         self._active_prompt_preset = selected
@@ -715,12 +728,8 @@ class OllamaChatApp(App[None]):
             )
         self.sub_title = f"Prompt preset set: {selected}"
 
-    async def _load_conversation_from_path(self, path: Path) -> None:
-        try:
-            payload = self.persistence.load_conversation(path)
-        except Exception:
-            self.sub_title = "Failed to load conversation."
-            return
+    async def _load_conversation_payload(self, payload: dict[str, Any]) -> None:
+        """Apply a loaded conversation payload to the chat and re-render the UI."""
         messages = payload.get("messages", [])
         model = payload.get("model", self.chat.model)
         if not isinstance(messages, list):
@@ -733,6 +742,14 @@ class OllamaChatApp(App[None]):
         await self._render_messages_from_history(self.chat.messages)
         self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
         self._update_status_bar()
+
+    async def _load_conversation_from_path(self, path: Path) -> None:
+        try:
+            payload = self.persistence.load_conversation(path)
+        except Exception:
+            self.sub_title = "Failed to load conversation."
+            return
+        await self._load_conversation_payload(payload)
 
     async def _prompt_conversation_name(self) -> str:
         try:
@@ -763,42 +780,53 @@ class OllamaChatApp(App[None]):
                 key_display=binding.key_display,
             )
 
-        input_widget = self.query_one("#message_input", Input)
-        send_button = self.query_one("#send_button", Button)
+        # Populate widget cache once; avoids repeated DOM traversal on hot paths.
+        self._w_input = self.query_one("#message_input", Input)
+        self._w_send = self.query_one("#send_button", Button)
+        self._w_file = self.query_one("#file_button", Button)
+        self._w_activity = self.query_one("#activity_bar", ActivityBar)
+        self._w_status = self.query_one("#status_bar", StatusBar)
+        self._w_conversation = self.query_one(ConversationView)
+
         attach_button = self.query_one("#attach_button", Button)
-        file_button = self.query_one("#file_button", Button)
-        input_widget.disabled = True
-        send_button.disabled = True
+        self._w_input.disabled = True
+        self._w_send.disabled = True
         attach_button.disabled = not self.capabilities.vision_enabled
-        file_button.disabled = False
+        self._w_file.disabled = False
         self._update_status_bar()
 
         self._slash_registry = self._build_slash_registry()
 
-        activity_bar = self.query_one("#activity_bar", ActivityBar)
         palette_key = self._command_palette_key_display().lower()
-        activity_bar.set_shortcut_hints(f"{palette_key} commands")
+        self._w_activity.set_shortcut_hints(f"{palette_key} commands")
 
+        # The connection monitor starts only after _prepare_startup_model() completes
+        # so that the startup check sets _connection_state first, preventing the
+        # monitor from immediately overwriting the startup result with a concurrent
+        # check_connection() call.
         self._task_manager.add(
             asyncio.create_task(self._prepare_startup_model()), name="startup_model"
-        )
-        self._task_manager.add(
-            asyncio.create_task(self._connection_monitor_loop()), name="connection_monitor"
         )
 
     async def _prepare_startup_model(self) -> None:
         """Warm up model in background so UI stays responsive on launch."""
-        input_widget = self.query_one("#message_input", Input)
-        send_button = self.query_one("#send_button", Button)
-        file_button = self.query_one("#file_button", Button)
         try:
             await self._ensure_startup_model_ready()
         finally:
-            input_widget.disabled = False
-            send_button.disabled = False
-            file_button.disabled = False
-            input_widget.focus()
+            if self._w_input:
+                self._w_input.disabled = False
+                self._w_input.focus()
+            if self._w_send:
+                self._w_send.disabled = False
+            if self._w_file:
+                self._w_file.disabled = False
             self._update_status_bar()
+            # Start the connection monitor only after startup determines the initial
+            # connection state, so the two tasks cannot race to write _connection_state.
+            self._task_manager.add(
+                asyncio.create_task(self._connection_monitor_loop()),
+                name="connection_monitor",
+            )
 
     async def _ensure_startup_model_ready(self) -> None:
         """Ensure configured model is available before interactive usage."""
@@ -877,7 +905,7 @@ class OllamaChatApp(App[None]):
 
     def _restyle_rendered_bubbles(self) -> None:
         try:
-            conversation = self.query_one(ConversationView)
+            conversation = self._w_conversation or self.query_one(ConversationView)
         except Exception:
             return
         for bubble in conversation.children:
@@ -888,10 +916,20 @@ class OllamaChatApp(App[None]):
         return bool(getattr(self, "theme", ""))
 
     def _update_status_bar(self) -> None:
-        message_count = sum(
-            1 for message in self.chat.messages if message.get("role") != "system"
+        # Use non_system_count (no list copy) when the real MessageStore is available;
+        # fall back to iterating the messages property for test fakes that lack it.
+        ms = getattr(self.chat, "message_store", None)
+        if ms is not None and hasattr(ms, "non_system_count"):
+            message_count = ms.non_system_count
+        else:
+            message_count = sum(
+                1
+                for m in getattr(self.chat, "messages", [])
+                if m.get("role") != "system"
+            )
+        status_widget = getattr(self, "_w_status", None) or self.query_one(
+            "#status_bar", StatusBar
         )
-        status_widget = self.query_one("#status_bar", StatusBar)
         status_widget.set_status(
             connection_state=self._connection_state.value,
             model=self.chat.model,
@@ -963,7 +1001,9 @@ class OllamaChatApp(App[None]):
         try:
             while True:
                 connected = await self.chat.check_connection()
-                new_state = ConnectionState.ONLINE if connected else ConnectionState.OFFLINE
+                new_state = (
+                    ConnectionState.ONLINE if connected else ConnectionState.OFFLINE
+                )
                 if new_state != self._connection_state:
                     self._connection_state = new_state
                     LOGGER.info(
@@ -987,7 +1027,7 @@ class OllamaChatApp(App[None]):
     async def _add_message(
         self, content: str, role: str, timestamp: str = ""
     ) -> MessageBubble:
-        conversation = self.query_one(ConversationView)
+        conversation = self._w_conversation or self.query_one(ConversationView)
         bubble = await conversation.add_message(
             content=content,
             role=role,
@@ -1011,8 +1051,12 @@ class OllamaChatApp(App[None]):
     async def _open_attachment_dialog(self, mode: str) -> None:
         """Open a native file dialog with fallback for the given attachment mode."""
         if mode == "image":
+            # Guard against double-launch before setting up other locals.
+            if self._image_dialog_active:
+                return
+            self._image_dialog_active = True
             file_filter: list[tuple[str, list[str]]] | None = [
-                ("Images", ["*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.webp", "*.tiff", "*.tif"]),
+                ("Images", [f"*{ext}" for ext in sorted(_IMAGE_EXTENSIONS)]),
             ]
             title = "Attach image"
             callback = self._on_image_attach_dismissed
@@ -1021,10 +1065,6 @@ class OllamaChatApp(App[None]):
             title = "Attach file"
             callback = self._on_file_attach_dismissed
 
-        if mode == "image":
-            if self._image_dialog_active:
-                return
-            self._image_dialog_active = True
         try:
             path = await _open_native_file_dialog(title=title, file_filter=file_filter)
             if path is None:
@@ -1059,16 +1099,7 @@ class OllamaChatApp(App[None]):
             path,
             kind="image",
             max_bytes=10 * 1024 * 1024,
-            allowed_extensions={
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".bmp",
-                ".webp",
-                ".tiff",
-                ".tif",
-            },
+            allowed_extensions=_IMAGE_EXTENSIONS,
             home_only=False,
         )
         if not ok or resolved is None:
@@ -1100,7 +1131,7 @@ class OllamaChatApp(App[None]):
     @staticmethod
     def _is_image_path(path: str) -> bool:
         ext = os.path.splitext(path)[1].lower()
-        return ext in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+        return ext in _IMAGE_EXTENSIONS
 
     @staticmethod
     def _extract_paths_from_paste(text: str) -> list[str]:
@@ -1159,7 +1190,7 @@ class OllamaChatApp(App[None]):
             return
         option_text = str(event.option.prompt)
         command = option_text.split(" ", 1)[0]
-        input_widget = self.query_one("#message_input", Input)
+        input_widget = self._w_input or self.query_one("#message_input", Input)
         input_widget.value = f"{command} "
         input_widget.cursor_position = len(input_widget.value)
         self._hide_slash_menu()
@@ -1170,7 +1201,7 @@ class OllamaChatApp(App[None]):
         """Handle Up-arrow recall and slash quick-open."""
         if event.key == "up":
             try:
-                input_widget = self.query_one("#message_input", Input)
+                input_widget = self._w_input or self.query_one("#message_input", Input)
             except Exception:
                 return
             if input_widget.has_focus and not input_widget.value and self._last_prompt:
@@ -1181,7 +1212,9 @@ class OllamaChatApp(App[None]):
 
     def _show_slash_menu(self, prefix: str) -> None:
         try:
-            menu = self.query_one("#slash_menu", OptionList)
+            menu = self.query_one(
+                "#slash_menu", OptionList
+            )  # not cached (InputBox child)
         except Exception:
             return
         menu.clear_options()
@@ -1207,13 +1240,12 @@ class OllamaChatApp(App[None]):
         await self.send_user_message()
 
     async def _transition_state(self, new_state: ConversationState) -> None:
-        previous = await self.state.get_state()
+        """Transition to new_state atomically (single lock acquisition)."""
         await self.state.transition_to(new_state)
         LOGGER.info(
             "app.state.transition",
             extra={
                 "event": "app.state.transition",
-                "from_state": previous.value,
                 "to_state": new_state.value,
             },
         )
@@ -1248,7 +1280,8 @@ class OllamaChatApp(App[None]):
         )
 
         def _scroll() -> None:
-            self.query_one(ConversationView).scroll_end(animate=False)
+            conv = self._w_conversation or self.query_one(ConversationView)
+            conv.scroll_end(animate=False)
 
         handler = StreamHandler(
             bubble=assistant_bubble,
@@ -1274,7 +1307,8 @@ class OllamaChatApp(App[None]):
                     )
                 elif chunk.kind == "tool_call":
                     await handler.handle_tool_call(
-                        chunk.tool_name, chunk.tool_args,
+                        chunk.tool_name,
+                        chunk.tool_args,
                         self._stop_response_indicator_task,
                     )
                 elif chunk.kind == "tool_result":
@@ -1341,7 +1375,7 @@ class OllamaChatApp(App[None]):
 
     async def _clear_conversation_view(self) -> None:
         """Remove all rendered conversation bubbles."""
-        conversation = self.query_one(ConversationView)
+        conversation = self._w_conversation or self.query_one(ConversationView)
         if hasattr(conversation, "remove_children"):
             result = conversation.remove_children()
             if inspect.isawaitable(result):
@@ -1397,12 +1431,12 @@ class OllamaChatApp(App[None]):
 
     def action_scroll_up(self) -> None:
         """Scroll conversation up."""
-        conversation = self.query_one(ConversationView)
+        conversation = self._w_conversation or self.query_one(ConversationView)
         conversation.scroll_relative(y=-10, animate=False)
 
     def action_scroll_down(self) -> None:
         """Scroll conversation down."""
-        conversation = self.query_one(ConversationView)
+        conversation = self._w_conversation or self.query_one(ConversationView)
         conversation.scroll_relative(y=10, animate=False)
 
     async def action_toggle_model_picker(self) -> None:
@@ -1442,20 +1476,7 @@ class OllamaChatApp(App[None]):
         if payload is None:
             self.sub_title = "No saved conversation found."
             return
-
-        messages = payload.get("messages", [])
-        model = payload.get("model", self.chat.model)
-        if not isinstance(messages, list):
-            self.sub_title = "Saved conversation format is invalid."
-            return
-
-        self.chat.load_history(messages)  # type: ignore[arg-type]
-        if isinstance(model, str) and model.strip():
-            self.chat.set_model(model.strip())
-        await self._clear_conversation_view()
-        await self._render_messages_from_history(self.chat.messages)
-        self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
-        self._update_status_bar()
+        await self._load_conversation_payload(payload)
 
     async def action_export_conversation(self) -> None:
         """Export current conversation to markdown."""
@@ -1472,7 +1493,7 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Failed to export conversation."
 
     def _jump_to_search_result(self, message_index: int) -> None:
-        conversation = self.query_one(ConversationView)
+        conversation = self._w_conversation or self.query_one(ConversationView)
         non_system_index = -1
         for index, message in enumerate(self.chat.messages):
             if message.get("role") == "system":
@@ -1491,7 +1512,7 @@ class OllamaChatApp(App[None]):
 
     async def action_search_messages(self) -> None:
         """Search messages using input box text and cycle through results."""
-        input_widget = self.query_one("#message_input", Input)
+        input_widget = self._w_input or self.query_one("#message_input", Input)
         query = input_widget.value.strip().lower()
 
         if not query and self._search.has_results():
@@ -1531,7 +1552,7 @@ class OllamaChatApp(App[None]):
                 self.copy_to_clipboard(content)  # type: ignore[attr-defined]
                 self.sub_title = "Copied latest assistant message."
             else:
-                input_widget = self.query_one("#message_input", Input)
+                input_widget = self._w_input or self.query_one("#message_input", Input)
                 input_widget.value = content
                 self.sub_title = "Clipboard unavailable. Message placed in input box."
             return
@@ -1539,9 +1560,9 @@ class OllamaChatApp(App[None]):
 
     async def send_user_message(self) -> None:
         """Collect input text and stream the assistant response into the UI."""
-        input_widget = self.query_one("#message_input", Input)
-        send_button = self.query_one("#send_button", Button)
-        file_button = self.query_one("#file_button", Button)
+        input_widget = self._w_input or self.query_one("#message_input", Input)
+        send_button = self._w_send or self.query_one("#send_button", Button)
+        file_button = self._w_file or self.query_one("#file_button", Button)
         raw_text = input_widget.value.strip()
 
         # Intercept slash commands before sending to LLM.
@@ -1567,22 +1588,12 @@ class OllamaChatApp(App[None]):
         # Validate image paths before sending.
         valid_images: list[str | bytes] = []
         valid_files: list[str] = []
-        allowed_image_exts = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".bmp",
-            ".webp",
-            ".tiff",
-            ".tif",
-        }
         for img_path in all_images:
             ok, message, resolved = _validate_attachment(
                 img_path,
                 kind="image",
                 max_bytes=10 * 1024 * 1024,
-                allowed_extensions=allowed_image_exts,
+                allowed_extensions=_IMAGE_EXTENSIONS,
                 home_only=False,
             )
             if ok and resolved is not None:
@@ -1633,13 +1644,18 @@ class OllamaChatApp(App[None]):
         send_button.disabled = True
         file_button.disabled = True
         try:
-            self.query_one("#activity_bar", ActivityBar).start_activity()
+            activity = self._w_activity or self.query_one("#activity_bar", ActivityBar)
+            activity.start_activity()
         except Exception:
             pass
         # Clear pending images and files now that we've consumed them.
         self._attachments.clear()
         try:
-            display_text = raw_text if raw_text else f"[{len(valid_images)} image(s), {len(valid_files)} file(s)]"
+            display_text = (
+                raw_text
+                if raw_text
+                else f"[{len(valid_images)} image(s), {len(valid_files)} file(s)]"
+            )
             self.sub_title = "Sending message..."
             await self._add_message(
                 content=display_text, role="user", timestamp=self._timestamp()
@@ -1660,14 +1676,18 @@ class OllamaChatApp(App[None]):
                 max_chars = 4000
                 if len(snippet) > max_chars:
                     snippet = snippet[:max_chars] + "\n... [truncated]"
-                file_context_parts.append(f"[File: {os.path.basename(path)}]\n{snippet}")
+                file_context_parts.append(
+                    f"[File: {os.path.basename(path)}]\n{snippet}"
+                )
 
             final_user_text = user_text
             if file_context_parts:
                 file_context = "\n\n".join(file_context_parts)
-                final_user_text = f"{user_text}\n\n{file_context}" if user_text else file_context
+                final_user_text = (
+                    f"{user_text}\n\n{file_context}" if user_text else file_context
+                )
             self._last_prompt = final_user_text
-            self._save_last_prompt(final_user_text)
+            await self._save_last_prompt(final_user_text)
             self._hide_slash_menu()
 
             stream_task = asyncio.create_task(
@@ -1684,10 +1704,8 @@ class OllamaChatApp(App[None]):
                 self._task_manager.discard("active_stream")
             self._set_idle_sub_title("Ready")
         except asyncio.CancelledError:
+            # chat.py already logs "chat.request.cancelled"; no duplicate log here.
             self.sub_title = "Request cancelled."
-            LOGGER.info(
-                "chat.request.cancelled", extra={"event": "chat.request.cancelled"}
-            )
             return
         except OllamaChatError as exc:  # noqa: BLE001
             msg_tpl, subtitle = _STREAM_ERROR_MESSAGES.get(
@@ -1699,7 +1717,10 @@ class OllamaChatApp(App[None]):
             )
         finally:
             try:
-                self.query_one("#activity_bar", ActivityBar).stop_activity()
+                activity = self._w_activity or self.query_one(
+                    "#activity_bar", ActivityBar
+                )
+                activity.stop_activity()
             except Exception:
                 pass
             input_widget.disabled = False
@@ -1767,7 +1788,7 @@ class OllamaChatApp(App[None]):
 
     async def _dispatch_slash_command(self, raw_text: str) -> bool:
         """Intercept and execute slash commands. Returns True if handled."""
-        input_widget = self.query_one("#message_input", Input)
+        input_widget = self._w_input or self.query_one("#message_input", Input)
         parts = raw_text.split(maxsplit=1)
         prefix = parts[0].lower()
         args = parts[1] if len(parts) == 2 else ""

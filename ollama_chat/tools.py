@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -18,17 +19,28 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency.
 
 LOGGER = logging.getLogger(__name__)
 
+# Serialise all temporary env-var mutations so that concurrent threads
+# (e.g. when tool execution is offloaded via asyncio.to_thread) cannot
+# observe each other's transient OLLAMA_API_KEY value.
+_env_lock = threading.Lock()
+
 
 def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
-    old_value = os.environ.get(key)
-    os.environ[key] = value
-    try:
-        return fn()
-    finally:
-        if old_value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = old_value
+    """Temporarily set an environment variable, call fn(), then restore.
+
+    Protected by a module-level lock so that concurrent threads do not
+    observe each other's transient environment changes.
+    """
+    with _env_lock:
+        old_value = os.environ.get(key)
+        os.environ[key] = value
+        try:
+            return fn()
+        finally:
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
 
 class ToolRegistry:
@@ -56,6 +68,9 @@ class ToolRegistry:
         """Execute a named tool and return its string result.
 
         Raises OllamaToolError if the tool is unknown or raises an exception.
+        This method is synchronous; callers in an async context should use
+        ``asyncio.to_thread(registry.execute, name, args)`` to avoid blocking
+        the event loop.
         """
         fn = self._tools.get(name)
         if fn is None:

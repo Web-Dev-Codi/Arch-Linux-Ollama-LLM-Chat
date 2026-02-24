@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable
+from typing import Any, Iterable
 
-Message = dict[str, str]
+# Public message type (no internal fields).
+Message = dict[str, Any]
 
 
 class MessageStore:
@@ -25,8 +26,8 @@ class MessageStore:
                 {
                     "role": "system",
                     "content": system_prompt.strip(),
-                    "_token_estimate": str(
-                        self._estimate_tokens_for_parts("system", system_prompt.strip())
+                    "_token_estimate": self._estimate_tokens_for_parts(
+                        "system", system_prompt.strip()
                     ),
                 }
             )
@@ -34,22 +35,35 @@ class MessageStore:
 
     @property
     def messages(self) -> list[Message]:
-        """Return a shallow copy of all stored messages."""
+        """Return a shallow copy of all stored messages (without internal keys)."""
         cleaned: list[Message] = []
         for message in self._messages:
-            payload = dict(message)
-            payload.pop("_token_estimate", None)
+            payload = {k: v for k, v in message.items() if not k.startswith("_")}
             cleaned.append(payload)
         return cleaned
 
     @property
     def message_count(self) -> int:
-        """Return the number of stored messages."""
+        """Return the total number of stored messages."""
         return len(self._messages)
+
+    @property
+    def non_system_count(self) -> int:
+        """Return the number of non-system messages without copying the list."""
+        return sum(1 for m in self._messages if m.get("role") != "system")
 
     def clear(self) -> None:
         """Reset store while preserving initial system messages."""
         self._messages = list(self._base_messages)
+
+    def rollback_last_user_append(self) -> None:
+        """Remove the last message if it is a user message.
+
+        Used to undo a user-message append when streaming fails, preventing
+        consecutive user messages from corrupting API history on the next send.
+        """
+        if self._messages and self._messages[-1].get("role") == "user":
+            self._messages.pop()
 
     def replace_messages(self, messages: list[Message]) -> None:
         """Replace history from persisted data while keeping invariants."""
@@ -62,8 +76,8 @@ class MessageStore:
                     {
                         "role": role,
                         "content": content,
-                        "_token_estimate": str(
-                            self._estimate_tokens_for_parts(role, content)
+                        "_token_estimate": self._estimate_tokens_for_parts(
+                            role, content
                         ),
                     }
                 )
@@ -91,8 +105,8 @@ class MessageStore:
             {
                 "role": normalized_role,
                 "content": normalized_content,
-                "_token_estimate": str(
-                    self._estimate_tokens_for_parts(normalized_role, normalized_content)
+                "_token_estimate": self._estimate_tokens_for_parts(
+                    normalized_role, normalized_content
                 ),
             }
         )
@@ -107,12 +121,14 @@ class MessageStore:
     @classmethod
     def _message_tokens(cls, message: Message) -> int:
         cached = message.get("_token_estimate")
-        if isinstance(cached, str) and cached.isdigit():
-            return int(cached)
+        # Fast path: cached int from append/replace_messages.
+        if isinstance(cached, int):
+            return cached
+        # Fallback: recompute and cache (handles messages loaded without estimates).
         role = message.get("role", "")
         content = message.get("content", "")
         estimate = cls._estimate_tokens_for_parts(str(role), str(content))
-        message["_token_estimate"] = str(estimate)
+        message["_token_estimate"] = estimate
         return estimate
 
     def estimated_tokens(self, messages: Iterable[Message] | None = None) -> int:
@@ -140,34 +156,49 @@ class MessageStore:
         )
 
     def _trim_by_history_limit(self) -> None:
-        while len(self._messages) > self.max_history_messages:
-            removed = self._remove_oldest_non_system(self._messages)
-            if not removed:
-                self._messages.pop(0)
+        """Enforce max_history_messages in O(n) by slicing, not repeated deletion."""
+        if len(self._messages) <= self.max_history_messages:
+            return
+        system_msgs = [m for m in self._messages if m.get("role") == "system"]
+        non_system = [m for m in self._messages if m.get("role") != "system"]
+        max_non_system = max(0, self.max_history_messages - len(system_msgs))
+        # Keep only the newest non-system messages that fit within the limit.
+        trimmed = non_system[-max_non_system:] if max_non_system > 0 else []
+        self._messages = system_msgs + trimmed
 
     def _trim_context_in_place(
         self, context: list[Message], max_context_tokens: int
     ) -> None:
-        """Remove oldest non-system messages until token budget is met.
+        """Remove oldest non-system messages until token budget is met — O(n).
 
-        Token total is maintained incrementally (O(n)) rather than
-        re-computed from scratch on every removal (was O(n²)).
+        Walks from newest to oldest non-system message, greedily keeping messages
+        that fit within the remaining budget after reserving space for system messages.
+        This matches the original FIFO-eviction semantics in a single pass.
         """
         total = sum(self._message_tokens(m) for m in context)
-        while total > max_context_tokens and context:
-            for index, message in enumerate(context):
-                if message.get("role") != "system":
-                    total -= self._message_tokens(message)
-                    del context[index]
-                    break
+        if total <= max_context_tokens:
+            return
+
+        system_msgs = [m for m in context if m.get("role") == "system"]
+        non_system = [m for m in context if m.get("role") != "system"]
+
+        if not non_system:
+            return  # Only system messages remain; cannot trim further.
+
+        system_cost = sum(self._message_tokens(m) for m in system_msgs)
+        budget = max(0, max_context_tokens - system_cost)
+
+        # Walk from newest (right) to oldest (left), accumulating tokens.
+        # Stop as soon as a message exceeds the remaining budget — all older
+        # messages would also have been evicted by the original FIFO algorithm.
+        kept_start = len(non_system)  # default: keep nothing
+        cumulative = 0
+        for i in range(len(non_system) - 1, -1, -1):
+            cost = self._message_tokens(non_system[i])
+            if cumulative + cost <= budget:
+                cumulative += cost
+                kept_start = i
             else:
-                # Only system messages remain; cannot trim further.
                 break
 
-    @staticmethod
-    def _remove_oldest_non_system(messages: list[Message]) -> bool:
-        for index, message in enumerate(messages):
-            if message.get("role") != "system":
-                del messages[index]
-                return True
-        return False
+        context[:] = system_msgs + non_system[kept_start:]

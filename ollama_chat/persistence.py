@@ -32,30 +32,23 @@ class ConversationPersistence:
         self.directory = Path(directory).expanduser()
         self.metadata_path = Path(metadata_path).expanduser()
 
-    def _enforce_private_permissions(self, path: Path) -> None:
+    def _enforce_permissions(self, path: Path, mode: int = 0o600) -> None:
+        """Set POSIX permissions on a file or directory; silently ignores failures."""
         if os.name != "posix":
             return
         try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-
-    def _enforce_private_directory(self, path: Path) -> None:
-        if os.name != "posix":
-            return
-        try:
-            path.chmod(0o700)
+            path.chmod(mode)
         except OSError:
             pass
 
     def _ensure_paths(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._enforce_private_directory(self.directory)
+        self._enforce_permissions(self.directory, 0o700)
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        self._enforce_private_directory(self.metadata_path.parent)
+        self._enforce_permissions(self.metadata_path.parent, 0o700)
         if not self.metadata_path.exists():
             self.metadata_path.write_text("[]", encoding="utf-8")
-        self._enforce_private_permissions(self.metadata_path)
+        self._enforce_permissions(self.metadata_path)
 
     def _resolve_snapshot_path(self, raw_path: str) -> Path | None:
         candidate = Path(raw_path).expanduser()
@@ -101,7 +94,7 @@ class ConversationPersistence:
             json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        self._enforce_private_permissions(self.metadata_path)
+        self._enforce_permissions(self.metadata_path)
 
     def list_conversations(self) -> list[dict[str, str]]:
         """List known conversation snapshots, newest first."""
@@ -136,7 +129,7 @@ class ConversationPersistence:
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        self._enforce_private_permissions(target)
+        self._enforce_permissions(target)
 
         index_rows = self._read_index()
         index_row: dict[str, str] = {"path": str(target), "created_at": created_at}
@@ -182,5 +175,5 @@ class ConversationPersistence:
             lines.append(content)
             lines.append("")
         target.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
-        self._enforce_private_permissions(target)
+        self._enforce_permissions(target)
         return target

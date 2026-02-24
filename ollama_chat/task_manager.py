@@ -28,6 +28,25 @@ class TaskManager:
         else:
             self._anonymous.add(task)
             task.add_done_callback(self._anonymous.discard)
+            task.add_done_callback(self._log_anonymous_exception)
+
+    def _log_anonymous_exception(self, task: asyncio.Task[Any]) -> None:
+        """Log unhandled exceptions from anonymous tasks so they are not silently lost."""
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except Exception:
+            return
+        if exc is not None:
+            LOGGER.warning(
+                "task.anonymous.exception",
+                extra={
+                    "event": "task.anonymous.exception",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
 
     def get(self, name: str) -> asyncio.Task[Any] | None:
         """Return the named task or ``None`` if not registered."""
