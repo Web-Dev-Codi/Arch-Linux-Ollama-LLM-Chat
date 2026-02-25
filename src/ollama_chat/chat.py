@@ -7,6 +7,8 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 import logging
 import inspect
+import json
+import re
 from typing import Any, Literal
 
 from .exceptions import (
@@ -419,6 +421,59 @@ class OllamaChat:
         value = cls._extract_from_chunk(chunk, "tool_calls")
         return value if isinstance(value, list) else []
 
+    @staticmethod
+    def _parse_inline_tool_call_from_content(
+        content: str, allowed_names: set[str]
+    ) -> list[dict[str, Any]]:
+        """Parse a tool call embedded as JSON in content code blocks.
+
+        Some models emit a JSON object like {"name": "ls", "arguments": {}}
+        instead of structured tool_calls. Convert it to a minimal tool_call
+        dict only when the name is in allowed_names.
+        """
+        text = (content or "").strip()
+        if not text:
+            return []
+
+        # Prefer ```json code blocks if present.
+        match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text, re.IGNORECASE)
+        candidate = match.group(1) if match else text
+
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            return []
+
+        def _as_call(obj: dict[str, Any]) -> list[dict[str, Any]]:
+            if not isinstance(obj, dict):
+                return []
+            if isinstance(obj.get("function"), dict):
+                fn = obj["function"]
+                name = str(fn.get("name", ""))
+                if name and name in allowed_names:
+                    args = fn.get("arguments", {})
+                    if not isinstance(args, dict):
+                        args = {}
+                    return [{"function": {"name": name, "arguments": args}}]
+                return []
+            name = str(obj.get("name", ""))
+            if name and name in allowed_names:
+                args = obj.get("arguments", {})
+                if not isinstance(args, dict):
+                    args = {}
+                return [{"function": {"name": name, "arguments": args}}]
+            return []
+
+        if isinstance(parsed, list):
+            for item in parsed:
+                calls = _as_call(item)
+                if calls:
+                    return calls
+            return []
+        if isinstance(parsed, dict):
+            return _as_call(parsed)
+        return []
+
     def _map_exception(self, exc: Exception) -> OllamaChatError:
         if isinstance(exc, OllamaChatError):
             return exc
@@ -504,6 +559,20 @@ class OllamaChat:
                 yield ChatChunk(kind="content", text=content_text)
 
             chunk_tool_calls = self._extract_chunk_tool_calls(chunk)
+
+            # If the model printed a JSON tool call in content (no structured field),
+            # parse it and treat it as a tool_call so the agent loop can proceed.
+            if not chunk_tool_calls and tools and content_text:
+                allowed: set[str] = set()
+                for t in tools:
+                    if isinstance(t, dict):
+                        fn = t.get("function", {})
+                        if isinstance(fn, dict):
+                            n = fn.get("name")
+                            if isinstance(n, str) and n:
+                                allowed.add(n)
+                for tc in self._parse_inline_tool_call_from_content(content_text, allowed):
+                    chunk_tool_calls.append(tc)
             for tc in chunk_tool_calls:
                 name, args, index = self._parse_tool_call(tc)
                 if name:

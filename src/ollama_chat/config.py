@@ -276,6 +276,46 @@ class PersistenceConfig(BaseModel):
         return normalized
 
 
+class ToolsConfig(BaseModel):
+    """Runtime policy for schema-based coding tools."""
+
+    enabled: bool = True
+    workspace_root: str = "."
+    allow_external_directories: bool = False
+    command_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    max_output_lines: int = Field(default=200, ge=1, le=10_000)
+    max_output_bytes: int = Field(default=50_000, ge=256, le=5_000_000)
+    max_read_bytes: int = Field(default=200_000, ge=256, le=20_000_000)
+    max_search_results: int = Field(default=200, ge=1, le=10_000)
+    default_external_directories: list[str] = Field(default_factory=list)
+
+    @field_validator("workspace_root", mode="before")
+    @classmethod
+    def _validate_workspace_root(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("workspace_root must be a string.")
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("workspace_root must not be empty.")
+        return normalized
+
+    @field_validator("default_external_directories", mode="before")
+    @classmethod
+    def _validate_external_directories(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("default_external_directories must be a list.")
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("default_external_directories entries must be strings.")
+            candidate = item.strip()
+            if candidate:
+                normalized.append(candidate)
+        return normalized
+
+
 class CapabilitiesConfig(BaseModel):
     """User-facing feature preferences for thinking, tools, web search, and vision.
 
@@ -313,6 +353,7 @@ class Config(BaseModel):
     security: SecurityConfig = SecurityConfig()
     logging: LoggingConfig = LoggingConfig()
     persistence: PersistenceConfig = PersistenceConfig()
+    tools: ToolsConfig = ToolsConfig()
     capabilities: CapabilitiesConfig = CapabilitiesConfig()
 
     @model_validator(mode="after")

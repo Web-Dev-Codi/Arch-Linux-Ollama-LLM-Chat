@@ -5,7 +5,13 @@ from __future__ import annotations
 import unittest
 
 from ollama_chat.exceptions import OllamaToolError
-from ollama_chat.tools import ToolRegistry, build_default_registry
+from ollama_chat.tools import (
+    ToolRegistry,
+    ToolRegistryOptions,
+    ToolRuntimeOptions,
+    build_default_registry,
+    build_registry,
+)
 
 
 def _add(a: int, b: int) -> int:
@@ -105,6 +111,49 @@ class ToolRegistryTests(unittest.TestCase):
         registry.register(_add)
         # Second registration overwrites the first (same name key).
         self.assertEqual(len(registry.build_tools_list()), 1)
+
+    def test_schema_tools_are_exported_when_custom_tools_enabled(self) -> None:
+        registry = build_registry(ToolRegistryOptions(enable_custom_tools=True))
+        tools = registry.build_tools_list()
+        schema_tools = [item for item in tools if isinstance(item, dict)]
+        self.assertTrue(
+            any(item["function"]["name"] == "read" for item in schema_tools)
+        )
+        self.assertTrue(
+            any(item["function"]["name"] == "bash" for item in schema_tools)
+        )
+
+    def test_schema_tool_validation_rejects_missing_required_argument(self) -> None:
+        registry = build_registry(ToolRegistryOptions(enable_custom_tools=True))
+        with self.assertRaises(OllamaToolError):
+            registry.execute("read", {})
+
+    def test_truncation_applies_to_schema_tool_outputs(self) -> None:
+        registry = build_registry(
+            ToolRegistryOptions(
+                enable_custom_tools=True,
+                runtime_options=registry_runtime_options(
+                    max_output_lines=2,
+                    max_output_bytes=5000,
+                ),
+            )
+        )
+        registry.execute("todo", {"item": "line-1"})
+        registry.execute("todo", {"item": "line-2"})
+        registry.execute("todo", {"item": "line-3"})
+        rendered = registry.execute("todoread", {})
+        self.assertIn("truncated", rendered)
+
+
+def registry_runtime_options(
+    *,
+    max_output_lines: int,
+    max_output_bytes: int,
+) -> ToolRuntimeOptions:
+    return ToolRuntimeOptions(
+        max_output_lines=max_output_lines,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 if __name__ == "__main__":

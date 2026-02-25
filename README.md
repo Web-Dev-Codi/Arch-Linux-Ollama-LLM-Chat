@@ -105,6 +105,7 @@
 - **Seamless model switching** — capabilities update instantly when you switch models mid-conversation
 - **Chain-of-thought reasoning** for models that support it (e.g. `qwen3`, `deepseek-r1`, `deepseek-v3.1`, `gpt-oss`)
 - **Tool calling** and a full agent loop for multi-step model actions
+- **Custom coding tools** (`read`, `grep`, `glob`, `ls`, `write`, `edit`, `multiedit`, `apply_patch`, `bash`, `batch`, planning/todo/task tools, and more)
 - **Web search** via Ollama's built-in tools (requires an Ollama API key)
 - **Vision / image attachments** for vision-capable models (e.g. `gemma3`, `llava`)
 - **Context window alignment** — `max_context_tokens` is forwarded to Ollama as `options.num_ctx` so the server-side context window always matches the client-side trim budget
@@ -278,6 +279,20 @@ enabled = false
 directory = "~/.local/state/ollamaterm/conversations"
 metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
+[tools]
+# Enable schema-first custom coding tools
+enabled = true
+# Base root for file/search/edit tools
+workspace_root = "."
+# Allow temporary external roots via external-directory tool
+allow_external_directories = false
+command_timeout_seconds = 30
+max_output_lines = 200
+max_output_bytes = 50000
+max_read_bytes = 200000
+max_search_results = 200
+default_external_directories = []
+
 [capabilities]
 # Show the model's reasoning trace inside the assistant bubble.
 # Thinking support itself is auto-detected — this controls only the UI display.
@@ -345,6 +360,18 @@ Automatically active when the model reports `"tools"` in its capabilities.
 The agent loop allows the model to invoke tools multiple times before producing
 a final answer. Control the upper bound with `max_tool_iterations` in
 `[capabilities]`.
+
+In addition to Ollama web tools, OllamaTerm now ships a schema-first local
+coding toolset designed for agentic workflows:
+
+- File and search tools: `read`, `ls`, `glob`, `grep`, `codesearch`
+- Editing tools: `write`, `edit`, `multiedit`, `apply_patch`
+- Runtime tools: `bash`, `batch`, `external-directory`
+- Planning/state tools: `plan-enter`, `plan-exit`, `plan`, `todo`, `todoread`, `todowrite`, `task`, `question`
+- Introspection tools: `registry`, `tool`, `truncation`, `invalid`
+
+These tools are controlled by the `[tools]` config section and are constrained
+by workspace-root path checks, command timeouts, and output truncation limits.
 
 ### Web search
 

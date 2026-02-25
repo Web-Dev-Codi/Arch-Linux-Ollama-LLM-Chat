@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
+from .custom_tools import CustomToolSuite, ToolRuntimeOptions, ToolSpec
 from .exceptions import OllamaToolError
 
 try:
@@ -44,11 +45,35 @@ def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
                 os.environ[key] = old_value
 
 
+def _truncate_output(text: str, max_lines: int, max_bytes: int) -> tuple[str, bool]:
+    """Apply deterministic truncation by byte and line limits."""
+    truncated = False
+    result = text
+
+    if max_bytes > 0:
+        encoded = result.encode("utf-8", errors="ignore")
+        if len(encoded) > max_bytes:
+            truncated = True
+            clipped = encoded[:max_bytes]
+            result = clipped.decode("utf-8", errors="ignore")
+            result += "\n... [truncated by byte limit]"
+
+    if max_lines > 0:
+        lines = result.splitlines()
+        if len(lines) > max_lines:
+            truncated = True
+            result = "\n".join(lines[:max_lines] + ["... [truncated by line limit]"])
+
+    return result, truncated
+
+
 class ToolRegistry:
     """Registry of callable tools available to the model during an agent loop."""
 
-    def __init__(self) -> None:
+    def __init__(self, runtime_options: ToolRuntimeOptions | None = None) -> None:
         self._tools: dict[str, Callable[..., Any]] = {}
+        self._specs: dict[str, ToolSpec] = {}
+        self._runtime_options = runtime_options or ToolRuntimeOptions()
 
     def register(self, fn: Callable[..., Any]) -> None:
         """Register a callable as a named tool.
@@ -61,9 +86,97 @@ class ToolRegistry:
             extra={"event": "tools.registered", "tool": fn.__name__},
         )
 
-    def build_tools_list(self) -> list[Callable[..., Any]]:
-        """Return the list of tool callables for passing to the Ollama SDK."""
-        return list(self._tools.values())
+    def register_spec(self, spec: ToolSpec) -> None:
+        """Register a schema-first tool specification."""
+        self._specs[spec.name] = spec
+        LOGGER.debug(
+            "tools.spec.registered",
+            extra={"event": "tools.spec.registered", "tool": spec.name},
+        )
+
+    def list_tool_names(self) -> list[str]:
+        """Return all callable and schema tool names."""
+        names = set(self._tools.keys()) | set(self._specs.keys())
+        return sorted(names)
+
+    def build_tools_list(self) -> list[Any]:
+        """Return callable and schema tools for passing to the Ollama SDK."""
+        callables = list(self._tools.values())
+        schema_tools = [spec.as_ollama_tool() for spec in self._specs.values()]
+        return callables + schema_tools
+
+    def _validate_value(self, name: str, value: Any, schema: dict[str, Any]) -> None:
+        expected = schema.get("type")
+        if expected is None:
+            return
+
+        if expected == "string":
+            if not isinstance(value, str):
+                raise OllamaToolError(f"Argument {name!r} must be a string.")
+            return
+
+        if expected == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise OllamaToolError(f"Argument {name!r} must be an integer.")
+            return
+
+        if expected == "number":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise OllamaToolError(f"Argument {name!r} must be numeric.")
+            return
+
+        if expected == "boolean":
+            if not isinstance(value, bool):
+                raise OllamaToolError(f"Argument {name!r} must be a boolean.")
+            return
+
+        if expected == "object":
+            if not isinstance(value, dict):
+                raise OllamaToolError(f"Argument {name!r} must be an object.")
+            return
+
+        if expected == "array":
+            if not isinstance(value, list):
+                raise OllamaToolError(f"Argument {name!r} must be an array.")
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for idx, item in enumerate(value):
+                    self._validate_value(f"{name}[{idx}]", item, item_schema)
+            return
+
+    def _validate_schema_arguments(
+        self,
+        schema: dict[str, Any],
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate arguments against a constrained JSON schema subset."""
+        if not isinstance(arguments, dict):
+            raise OllamaToolError("Tool arguments must be a JSON object.")
+
+        if schema.get("type") != "object":
+            raise OllamaToolError("Tool schema root must be an object.")
+
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            raise OllamaToolError("Tool schema properties must be an object.")
+        required = schema.get("required", [])
+        if not isinstance(required, list):
+            raise OllamaToolError("Tool schema required must be a list.")
+        additional_allowed = bool(schema.get("additionalProperties", False))
+
+        missing = [name for name in required if name not in arguments]
+        if missing:
+            raise OllamaToolError(f"Missing required argument(s): {', '.join(missing)}")
+
+        for arg_name, arg_value in arguments.items():
+            prop_schema = properties.get(arg_name)
+            if prop_schema is None:
+                if additional_allowed:
+                    continue
+                raise OllamaToolError(f"Unknown argument: {arg_name!r}")
+            self._validate_value(arg_name, arg_value, prop_schema)
+
+        return arguments
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a named tool and return its string result.
@@ -73,12 +186,36 @@ class ToolRegistry:
         ``asyncio.to_thread(registry.execute, name, args)`` to avoid blocking
         the event loop.
         """
+        spec = self._specs.get(name)
+        if spec is not None:
+            try:
+                validated = self._validate_schema_arguments(
+                    spec.parameters_schema,
+                    arguments,
+                )
+                result = str(spec.handler(validated))
+                truncated, _ = _truncate_output(
+                    result,
+                    max_lines=self._runtime_options.max_output_lines,
+                    max_bytes=self._runtime_options.max_output_bytes,
+                )
+                return truncated
+            except OllamaToolError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise OllamaToolError(f"Tool {name!r} raised an error: {exc}") from exc
+
         fn = self._tools.get(name)
         if fn is None:
             raise OllamaToolError(f"Unknown tool requested by model: {name!r}")
         try:
-            result = fn(**arguments)
-            return str(result)
+            result = str(fn(**arguments))
+            truncated, _ = _truncate_output(
+                result,
+                max_lines=self._runtime_options.max_output_lines,
+                max_bytes=self._runtime_options.max_output_bytes,
+            )
+            return truncated
         except OllamaToolError:
             raise
         except Exception as exc:  # noqa: BLE001 - tool functions can fail arbitrarily.
@@ -87,7 +224,7 @@ class ToolRegistry:
     @property
     def is_empty(self) -> bool:
         """Return True when no tools are registered."""
-        return not bool(self._tools)
+        return not bool(self._tools or self._specs)
 
 
 @dataclass(frozen=True)
@@ -100,30 +237,47 @@ class ToolRegistryOptions:
     """
 
     web_search_api_key: str | None = None
+    enable_custom_tools: bool = False
+    runtime_options: ToolRuntimeOptions = field(default_factory=ToolRuntimeOptions)
 
 
 def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
     """Build a ToolRegistry based on provided options.
 
-    - When ``options.web_search_api_key`` is a non-empty string, register
-      web_search and web_fetch tools with that key.
-    - Otherwise return an empty registry.
+    - Optional callable-based web_search/web_fetch registration remains for
+      backward compatibility.
+    - Optional schema-based custom coding tools are registered when
+      ``enable_custom_tools`` is true.
     """
-    registry = ToolRegistry()
+    runtime = options.runtime_options if options is not None else ToolRuntimeOptions()
+    registry = ToolRegistry(runtime_options=runtime)
     if options is None:
         return registry
 
     api_key = (options.web_search_api_key or "").strip()
-    if not api_key:
-        return registry
+    web_search_fn: Callable[[str, int], str] | None = None
+    web_fetch_fn: Callable[[str], str] | None = None
 
-    # Validate and register tools with the provided key
-    registry.register(_make_web_search_tool(api_key))
-    registry.register(_make_web_fetch_tool(api_key))
-    LOGGER.info(
-        "tools.web_search.enabled",
-        extra={"event": "tools.web_search.enabled"},
-    )
+    if api_key:
+        web_search_fn = _make_web_search_tool(api_key)
+        web_fetch_fn = _make_web_fetch_tool(api_key)
+        # Backwards-compatible callable registrations.
+        registry.register(web_search_fn)
+        registry.register(web_fetch_fn)
+        LOGGER.info(
+            "tools.web_search.enabled",
+            extra={"event": "tools.web_search.enabled"},
+        )
+
+    if options.enable_custom_tools:
+        suite = CustomToolSuite(
+            runtime_options=options.runtime_options,
+            web_search_fn=web_search_fn,
+            web_fetch_fn=web_fetch_fn,
+        )
+        suite.bind_executor(registry.execute)
+        for spec in suite.specs():
+            registry.register_spec(spec)
     return registry
 
 
