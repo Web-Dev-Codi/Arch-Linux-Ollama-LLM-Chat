@@ -92,10 +92,10 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertTrue(any("web_fetch" in n for n in tool_names))
 
     def test_build_default_registry_raises_without_api_key(self) -> None:
-        from ollama_chat.exceptions import OllamaToolError
-
         # Ensure OLLAMA_API_KEY is not set for this test.
         import os
+
+        from ollama_chat.exceptions import OllamaToolError
 
         old = os.environ.pop("OLLAMA_API_KEY", None)
         try:

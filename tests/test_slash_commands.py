@@ -10,8 +10,8 @@ try:
 except Exception:  # pragma: no cover
     OllamaChatApp = None  # type: ignore[assignment,misc]
 
-from ollama_chat.state import ConnectionState, StateManager
 from ollama_chat.capabilities import AttachmentState, SearchState
+from ollama_chat.state import ConnectionState, StateManager
 from ollama_chat.task_manager import TaskManager
 
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from importlib import metadata
-from typing import Sequence
 
 from .app import OllamaChatApp
 from .config import ensure_config_dir

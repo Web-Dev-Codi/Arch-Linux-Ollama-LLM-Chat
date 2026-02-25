@@ -174,8 +174,8 @@ class AppActionTests(unittest.IsolatedAsyncioTestCase):
         self.app.chat = _FakeChat()
         self.app.persistence = _FakePersistence()
         self.app.state = StateManager()
-        from ollama_chat.state import ConnectionState
         from ollama_chat.capabilities import AttachmentState, SearchState
+        from ollama_chat.state import ConnectionState
         from ollama_chat.task_manager import TaskManager
 
         self.app._task_manager = TaskManager()

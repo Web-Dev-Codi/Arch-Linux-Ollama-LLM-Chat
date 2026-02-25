@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import unittest
 from typing import Any
+import unittest
 
 from ollama_chat.stream_handler import StreamHandler
 

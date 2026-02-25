@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
@@ -112,7 +112,7 @@ class ConversationPersistence:
             raise PersistenceDisabledError("Persistence is disabled in configuration.")
 
         self._ensure_paths()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         created_at = now.isoformat()
         filename = f"{now.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.json"
         target = self.directory / filename
@@ -164,7 +164,7 @@ class ConversationPersistence:
             raise PersistenceDisabledError("Persistence is disabled in configuration.")
         self._ensure_paths()
 
-        filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-export.md"
+        filename = f"{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-export.md"
         target = self.directory / filename
         lines = [f"# Conversation Export ({model})", ""]
         for message in messages:

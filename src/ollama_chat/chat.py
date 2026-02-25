@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-import logging
 import inspect
 import json
+import logging
 import re
 from typing import Any, Literal
 
@@ -203,7 +203,7 @@ class OllamaChat:
         names: list[str] = []
         models: Any = None
         if hasattr(response, "models"):
-            models = getattr(response, "models")
+            models = response.models
         elif isinstance(response, dict):
             models = response.get("models")
         elif hasattr(response, "model_dump"):
@@ -310,7 +310,7 @@ class OllamaChat:
 
             # SDK object path.
             if hasattr(response, "capabilities"):
-                caps_raw = getattr(response, "capabilities")
+                caps_raw = response.capabilities
                 # Treat explicit None as unknown; anything else counts as present.
                 if caps_raw is not None:
                     caps_known = True

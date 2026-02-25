@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 import json
 import logging
-import tempfile
 from pathlib import Path
+import tempfile
 import unittest
+
+import structlog
 
 from ollama_chat.chat import OllamaChat
 from ollama_chat.logging_utils import configure_logging
-import structlog
 
 
 class RetryClient:

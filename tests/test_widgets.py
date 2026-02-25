@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 try:
-    from textual.widgets import Input, Button, Label
+    from textual.widgets import Button, Input, Label
 
     from ollama_chat.widgets.activity_bar import ActivityBar
     from ollama_chat.widgets.code_block import CodeBlock, split_message

@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import tomllib  # stdlib since Python 3.11 (project requires >=3.11)
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,8 +21,6 @@ from pydantic import (
 )
 
 from .exceptions import ConfigValidationError
-
-import tomllib  # stdlib since Python 3.11 (project requires >=3.11)
 
 LOGGER = logging.getLogger(__name__)
 

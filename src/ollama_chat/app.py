@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 import inspect
 import logging
 import os
-import sys
+from pathlib import Path
 import random
 import shutil
 import subprocess
-from pathlib import Path
-from collections.abc import Awaitable, Callable
+import sys
 from typing import Any
 from urllib.parse import urlparse
 
@@ -24,7 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
-from .chat import CapabilityReport, OllamaChat, ChatSendOptions
+from .chat import CapabilityReport, ChatSendOptions, OllamaChat
 from .commands import parse_inline_directives
 from .config import load_config
 from .exceptions import (
@@ -46,7 +46,7 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
-from .tools import ToolRegistry, build_registry, ToolRegistryOptions, ToolRuntimeOptions
+from .tools import ToolRegistry, ToolRegistryOptions, ToolRuntimeOptions, build_registry
 from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
@@ -116,7 +116,7 @@ async def _open_native_file_dialog(
                         cleaned = token.strip("',()><[]")
                         if cleaned.startswith("file://"):
                             return urllib.parse.unquote(cleaned[len("file://") :])
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     # --- zenity ---
@@ -137,7 +137,7 @@ async def _open_native_file_dialog(
                 path = stdout.decode().strip()
                 if path:
                     return path
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     # --- kdialog ---
@@ -158,7 +158,7 @@ async def _open_native_file_dialog(
                 path = stdout.decode().strip()
                 if path:
                     return path
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     return None

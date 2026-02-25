@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
+import tempfile
 import unittest
 
 from ollama_chat.config import DEFAULT_CONFIG, load_config
