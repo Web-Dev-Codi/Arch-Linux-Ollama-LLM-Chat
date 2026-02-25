@@ -1,7 +1,7 @@
 pkgname=ollamaterm
 pkgver=0.2.0
 pkgrel=1
-pkgdesc='ChatGPT-style TUI for Ollama local LLMs'
+pkgdesc='Chat TUI for Ollama local LLMs'
 arch=('any')
 url='https://github.com/brian/Arch-Linux-Ollama-LLM-Chat'
 license=('MIT')

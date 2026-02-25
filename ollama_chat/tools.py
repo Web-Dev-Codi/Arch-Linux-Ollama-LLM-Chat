@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 
@@ -89,6 +90,43 @@ class ToolRegistry:
         return not bool(self._tools)
 
 
+@dataclass(frozen=True)
+class ToolRegistryOptions:
+    """Options used to build a ToolRegistry without boolean flags.
+
+    If ``web_search_api_key`` is a non-empty string, web_search and web_fetch
+    tools are registered with the provided key. If it is empty or None, no web
+    tools are added.
+    """
+
+    web_search_api_key: str | None = None
+
+
+def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
+    """Build a ToolRegistry based on provided options.
+
+    - When ``options.web_search_api_key`` is a non-empty string, register
+      web_search and web_fetch tools with that key.
+    - Otherwise return an empty registry.
+    """
+    registry = ToolRegistry()
+    if options is None:
+        return registry
+
+    api_key = (options.web_search_api_key or "").strip()
+    if not api_key:
+        return registry
+
+    # Validate and register tools with the provided key
+    registry.register(_make_web_search_tool(api_key))
+    registry.register(_make_web_fetch_tool(api_key))
+    LOGGER.info(
+        "tools.web_search.enabled",
+        extra={"event": "tools.web_search.enabled"},
+    )
+    return registry
+
+
 def _make_web_search_tool(api_key: str) -> Callable[..., str]:
     """Return a web_search callable with the API key bound at creation time."""
 
@@ -152,14 +190,12 @@ def build_default_registry(
     web_search_enabled: bool = False,
     web_search_api_key: str = "",
 ) -> ToolRegistry:
-    """Build and return a ToolRegistry with built-in tools based on config.
+    """Compatibility wrapper for legacy API with a boolean flag.
 
-    When web_search_enabled is True, validates the API key once and registers
-    web_search and web_fetch with the key bound at construction time.
+    Prefer ``build_registry(ToolRegistryOptions(web_search_api_key=...))``.
     """
-    registry = ToolRegistry()
     if not web_search_enabled:
-        return registry
+        return ToolRegistry()
 
     # Resolve API key: explicit config value takes precedence over env var.
     api_key = web_search_api_key or os.environ.get("OLLAMA_API_KEY", "").strip()
@@ -169,10 +205,4 @@ def build_default_registry(
             "Set web_search_api_key in [capabilities] or export OLLAMA_API_KEY."
         )
 
-    registry.register(_make_web_search_tool(api_key))
-    registry.register(_make_web_fetch_tool(api_key))
-    LOGGER.info(
-        "tools.web_search.enabled",
-        extra={"event": "tools.web_search.enabled"},
-    )
-    return registry
+    return build_registry(ToolRegistryOptions(web_search_api_key=api_key))
