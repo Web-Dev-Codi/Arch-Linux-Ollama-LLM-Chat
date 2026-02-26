@@ -69,6 +69,36 @@ class ToolContext:
         """Return a shallow-copied context with a different call_id."""
         return replace(self, call_id=call_id)
 
+    @property
+    def project_root(self) -> Path:
+        """Get resolved project directory.
+
+        Replaces 16+ duplicate Path(...).expanduser().resolve() calls.
+        Added during Phase 1.2 refactoring.
+        """
+        from pathlib import Path
+
+        root = self.extra.get("project_dir", ".")
+        return Path(str(root)).expanduser().resolve()
+
+    def resolve_path(self, path: str | Path) -> Path:
+        """Resolve path relative to project root.
+
+        Args:
+            path: Absolute or relative path
+
+        Returns:
+            Resolved absolute path
+
+        Added during Phase 1.2 refactoring to eliminate duplicate path resolution.
+        """
+        from pathlib import Path
+
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            p = self.project_root / p
+        return p.resolve()
+
 
 class ParamsSchema(BaseModel):
     """Base class for all tool parameter schemas."""

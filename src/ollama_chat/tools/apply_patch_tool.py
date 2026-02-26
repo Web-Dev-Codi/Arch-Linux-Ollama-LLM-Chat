@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
-from support import bus, lsp_client
+from ..support import lsp_client
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from .utils import generate_unified_diff, notify_file_change, check_file_safety
 
 
 class ApplyPatchParams(ParamsSchema):
@@ -82,7 +81,12 @@ def _parse_patch(text: str) -> list[Any]:
                 else:
                     # Allow raw lines as well (defensive)
                     content.append(ln)
-            hunks.append(_AddHunk(path=path, content="\n".join(content) + ("\n" if content_lines else "")))
+            hunks.append(
+                _AddHunk(
+                    path=path,
+                    content="\n".join(content) + ("\n" if content_lines else ""),
+                )
+            )
             continue
         if line.startswith(_DELETE):
             path = line[len(_DELETE) :].strip()
@@ -153,7 +157,9 @@ def _apply_update_chunks(old: str, chunks: list[tuple[str, str]]) -> str:
             updated = updated.replace(old_text[:-1], new_text, 1)
             continue
         # As a last resort, raise error to surface mismatch
-        raise RuntimeError("apply_patch verification failed: cannot locate chunk in target file")
+        raise RuntimeError(
+            "apply_patch verification failed: cannot locate chunk in target file"
+        )
     return updated
 
 
@@ -177,38 +183,40 @@ class ApplyPatchTool(Tool):
 
         for h in hunks:
             if isinstance(h, _AddHunk):
-                path = Path(h.path).expanduser().resolve()
-                await assert_external_directory(ctx, str(path))
+                path = ctx.resolve_path(h.path)
+                await check_file_safety(path, ctx, assert_not_modified=False)
                 old_content = ""
                 new_content = h.content
-                diff = "\n".join(
-                    unified_diff(old_content.splitlines(), new_content.splitlines(), fromfile=str(path), tofile=str(path), lineterm="")
-                )
+                diff = generate_unified_diff(old_content, new_content, path)
                 diffs.append(diff)
                 file_list.append(str(path))
                 actions.append(("add", (path, new_content)))
             elif isinstance(h, _DeleteHunk):
-                path = Path(h.path).expanduser().resolve()
-                await assert_external_directory(ctx, str(path))
-                old_content = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
-                new_content = ""
-                diff = "\n".join(
-                    unified_diff(old_content.splitlines(), new_content.splitlines(), fromfile=str(path), tofile=str(path), lineterm="")
+                path = ctx.resolve_path(h.path)
+                await check_file_safety(path, ctx, assert_not_modified=False)
+                old_content = (
+                    path.read_text(encoding="utf-8", errors="ignore")
+                    if path.exists()
+                    else ""
                 )
+                new_content = ""
+                diff = generate_unified_diff(old_content, new_content, path)
                 diffs.append(diff)
                 file_list.append(str(path))
                 actions.append(("delete", (path,)))
             elif isinstance(h, _UpdateHunk):
-                src = Path(h.path).expanduser().resolve()
-                await assert_external_directory(ctx, str(src))
-                dst = Path(h.move_to).expanduser().resolve() if h.move_to else None
+                src = ctx.resolve_path(h.path)
+                await check_file_safety(src, ctx, assert_not_modified=False)
+                dst = ctx.resolve_path(h.move_to) if h.move_to else None
                 if dst is not None:
-                    await assert_external_directory(ctx, str(dst))
-                old_content = src.read_text(encoding="utf-8", errors="ignore") if src.exists() else ""
-                new_content = _apply_update_chunks(old_content, h.chunks)
-                diff = "\n".join(
-                    unified_diff(old_content.splitlines(), new_content.splitlines(), fromfile=str(src), tofile=str(dst or src), lineterm="")
+                    await check_file_safety(dst, ctx, assert_not_modified=False)
+                old_content = (
+                    src.read_text(encoding="utf-8", errors="ignore")
+                    if src.exists()
+                    else ""
                 )
+                new_content = _apply_update_chunks(old_content, h.chunks)
+                diff = generate_unified_diff(old_content, new_content, dst or src)
                 diffs.append(diff)
                 file_list.append(str(dst or src))
                 actions.append(("update", (src, dst, new_content)))
@@ -230,12 +238,7 @@ class ApplyPatchTool(Tool):
                 path.write_text(content, encoding="utf-8")
                 changed.append(f"A {path}")
                 try:
-                    await bus.bus.publish("file.edited", {"file": str(path)})
-                    await bus.bus.publish("file.watcher.updated", {"file": str(path), "event": "add"})
-                except Exception:
-                    pass
-                try:
-                    lsp_client.touch_file(str(path), notify=True)
+                    await notify_file_change(path, "create", ctx)
                 except Exception:
                     pass
             elif kind == "delete":
@@ -244,7 +247,7 @@ class ApplyPatchTool(Tool):
                     path.unlink(missing_ok=True)
                     changed.append(f"D {path}")
                     try:
-                        await bus.bus.publish("file.watcher.updated", {"file": str(path), "event": "unlink"})
+                        await notify_file_change(path, "delete", ctx)
                     except Exception:
                         pass
                 except Exception:
@@ -261,14 +264,11 @@ class ApplyPatchTool(Tool):
                         pass
                 changed.append(f"M {target}")
                 try:
-                    await bus.bus.publish("file.edited", {"file": str(target)})
-                    await bus.bus.publish("file.watcher.updated", {"file": str(target), "event": "change"})
-                except Exception:
-                    pass
-                try:
-                    lsp_client.touch_file(str(target), notify=True)
+                    await notify_file_change(target, "change", ctx)
                 except Exception:
                     pass
 
         output = "\n".join(changed) if changed else "No changes applied."
-        return ToolResult(title="apply_patch", output=output, metadata={"changed": len(changed)})
+        return ToolResult(
+            title="apply_patch", output=output, metadata={"changed": len(changed)}
+        )

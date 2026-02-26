@@ -4,10 +4,10 @@ import asyncio
 import os
 from pathlib import Path
 
-from support import ripgrep
+from ..support import ripgrep
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from .utils import check_file_safety
 
 MAX_RESULTS = 100
 
@@ -23,8 +23,7 @@ class GlobTool(Tool):
 
     async def execute(self, params: GlobParams, ctx: ToolContext) -> ToolResult:
         pattern = params.pattern
-        search_root = Path(str(params.path or ctx.extra.get("project_dir", ".")))
-        search_root = search_root.expanduser().resolve()
+        search_root = ctx.resolve_path(params.path or ".")
 
         await ctx.ask(
             permission="glob",
@@ -32,7 +31,7 @@ class GlobTool(Tool):
             always=["*"],
             metadata={"pattern": pattern, "path": str(search_root)},
         )
-        await assert_external_directory(ctx, str(search_root), kind="directory")
+        await check_file_safety(search_root, ctx, assert_not_modified=False)
 
         files: list[str] = []
         # Try ripgrep first
@@ -75,4 +74,6 @@ class GlobTool(Tool):
         output = "\n".join(files)
         if truncated:
             output += "\n... results truncated; refine your search pattern."
-        return ToolResult(title=f"glob: {pattern}", output=output, metadata={"truncated": truncated})
+        return ToolResult(
+            title=f"glob: {pattern}", output=output, metadata={"truncated": truncated}
+        )

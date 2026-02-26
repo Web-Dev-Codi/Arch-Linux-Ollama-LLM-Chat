@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from .utils import check_file_safety
 
 IGNORE_PATTERNS = [
     "node_modules/",
@@ -45,8 +45,8 @@ class ListTool(Tool):
     params_schema = ListParams
 
     async def execute(self, params: ListParams, ctx: ToolContext) -> ToolResult:
-        search = Path(str(params.path or ctx.extra.get("project_dir", "."))).expanduser().resolve()
-        await assert_external_directory(ctx, str(search), kind="directory")
+        search = ctx.resolve_path(params.path or ".")
+        await check_file_safety(search, ctx, assert_not_modified=False)
         await ctx.ask(
             permission="list",
             patterns=[str(search)],
@@ -64,7 +64,11 @@ class ListTool(Tool):
         for root, dirnames, filenames in os.walk(search):
             # Skip ignored directories by prefix match
             dirnames[:] = [
-                d for d in dirnames if not any((Path(root) / d).as_posix().endswith(p.rstrip("/")) for p in ignore)
+                d
+                for d in dirnames
+                if not any(
+                    (Path(root) / d).as_posix().endswith(p.rstrip("/")) for p in ignore
+                )
             ]
             for name in filenames:
                 files.append(Path(root) / name)
@@ -89,7 +93,10 @@ class ListTool(Tool):
         def render_dir(dir_path: Path, depth: int) -> str:
             indent = "  " * depth
             out = f"{indent}{dir_path.name}/\n" if depth > 0 else ""
-            children = sorted({d for d in dirs if d.parent == dir_path and d != dir_path}, key=lambda p: p.name.lower())
+            children = sorted(
+                {d for d in dirs if d.parent == dir_path and d != dir_path},
+                key=lambda p: p.name.lower(),
+            )
             for child in children:
                 out += render_dir(child, depth + 1)
             for fname in sorted(files_by_dir.get(dir_path, [])):
@@ -97,4 +104,8 @@ class ListTool(Tool):
             return out
 
         output = f"{str(search)}/\n" + render_dir(search, 0)
-        return ToolResult(title=f"list: {str(search)}", output=output.rstrip("\n"), metadata={"count": len(files)})
+        return ToolResult(
+            title=f"list: {str(search)}",
+            output=output.rstrip("\n"),
+            metadata={"count": len(files)},
+        )

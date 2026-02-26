@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from difflib import unified_diff
 from pathlib import Path
 
-from support import bus, lsp_client
-from support import file_time as file_time_service
+from ..support import lsp_client
+from ..support import file_time as file_time_service
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from .utils import generate_unified_diff, notify_file_change, check_file_safety
 
 
 class EditParams(ParamsSchema):
@@ -23,52 +22,54 @@ class EditTool(Tool):
 
     async def execute(self, params: EditParams, ctx: ToolContext) -> ToolResult:
         if params.old_string == params.new_string:
-            return ToolResult(title=params.file_path, output="No changes to apply.", metadata={"ok": False})
+            return ToolResult(
+                title=params.file_path,
+                output="No changes to apply.",
+                metadata={"ok": False},
+            )
 
-        file_path = Path(params.file_path).expanduser().resolve()
-        await assert_external_directory(ctx, str(file_path))
+        file_path = ctx.resolve_path(params.file_path)
+        await check_file_safety(file_path, ctx, assert_not_modified=False)
 
         # Special case: create new file when old_string is empty
         if params.old_string == "":
-            diff_lines = list(
-                unified_diff([], params.new_string.splitlines(), fromfile=str(file_path), tofile=str(file_path), lineterm="")
-            )
-            diff_str = "\n".join(diff_lines)
+            diff_str = generate_unified_diff("", params.new_string, file_path)
             await ctx.ask(
                 permission="edit",
                 patterns=[str(file_path)],
                 always=["*"],
                 metadata={"filepath": str(file_path), "diff": diff_str},
             )
+
             def _write() -> None:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_text(params.new_string, encoding="utf-8")
+
             await file_time_service.with_lock(str(file_path), _write)
             try:
-                await bus.bus.publish("file.edited", {"file": str(file_path)})
-                await bus.bus.publish("file.watcher.updated", {"file": str(file_path), "event": "add"})
+                await notify_file_change(file_path, "create", ctx)
             except Exception:
                 pass
-            try:
-                file_time_service.record_read(ctx.session_id, str(file_path))
-            except Exception:
-                pass
-            try:
-                lsp_client.touch_file(str(file_path), notify=True)
-            except Exception:
-                pass
-            return ToolResult(title=str(file_path), output="File created.", metadata={"created": True})
+            return ToolResult(
+                title=str(file_path), output="File created.", metadata={"created": True}
+            )
 
         # Otherwise, require prior read
         try:
-            await file_time_service.assert_read(ctx.session_id, str(file_path))
+            await check_file_safety(
+                file_path, ctx, check_external=False, assert_not_modified=True
+            )
         except Exception as exc:
-            return ToolResult(title=str(file_path), output=str(exc), metadata={"ok": False})
+            return ToolResult(
+                title=str(file_path), output=str(exc), metadata={"ok": False}
+            )
 
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception as exc:
-            return ToolResult(title=str(file_path), output=str(exc), metadata={"ok": False})
+            return ToolResult(
+                title=str(file_path), output=str(exc), metadata={"ok": False}
+            )
 
         # Simple replacement strategy: exact text, optionally first occurrence only
         occurrences = content.count(params.old_string)
@@ -91,16 +92,7 @@ class EditTool(Tool):
             else content.replace(params.old_string, params.new_string, 1)
         )
 
-        diff_lines = list(
-            unified_diff(
-                content.splitlines(),
-                new_content.splitlines(),
-                fromfile=str(file_path),
-                tofile=str(file_path),
-                lineterm="",
-            )
-        )
-        diff_str = "\n".join(diff_lines)
+        diff_str = generate_unified_diff(content, new_content, file_path)
         await ctx.ask(
             permission="edit",
             patterns=[str(file_path)],
@@ -110,30 +102,30 @@ class EditTool(Tool):
 
         def _write() -> None:
             file_path.write_text(new_content, encoding="utf-8")
+
         await file_time_service.with_lock(str(file_path), _write)
 
         try:
-            await bus.bus.publish("file.edited", {"file": str(file_path)})
-            await bus.bus.publish("file.watcher.updated", {"file": str(file_path), "event": "change"})
-        except Exception:
-            pass
-        try:
-            file_time_service.record_read(ctx.session_id, str(file_path))
-        except Exception:
-            pass
-        try:
-            lsp_client.touch_file(str(file_path), notify=True)
+            await notify_file_change(file_path, "change", ctx)
         except Exception:
             pass
 
         # LSP diagnostics
         try:
             diagnostics = lsp_client.get_diagnostics()
-            errors = [d for d in diagnostics.get(str(file_path), []) if d.get("severity") == 1]
+            errors = [
+                d for d in diagnostics.get(str(file_path), []) if d.get("severity") == 1
+            ]
             output = f"Applied {'all' if params.replace_all else 'one'} replacement successfully."
             if errors:
-                output += "\n<diagnostics>\n" + "\n".join(d.get("message", "") for d in errors[:20]) + "\n</diagnostics>"
+                output += (
+                    "\n<diagnostics>\n"
+                    + "\n".join(d.get("message", "") for d in errors[:20])
+                    + "\n</diagnostics>"
+                )
         except Exception:
             output = f"Applied {'all' if params.replace_all else 'one'} replacement successfully."
 
-        return ToolResult(title=str(file_path), output=output, metadata={"changed": True})
+        return ToolResult(
+            title=str(file_path), output=output, metadata={"changed": True}
+        )

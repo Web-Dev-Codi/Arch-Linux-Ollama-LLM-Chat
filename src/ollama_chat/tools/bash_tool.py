@@ -55,9 +55,7 @@ class BashParams(ParamsSchema):
 class BashTool(Tool):
     id = "bash"
     params_schema = BashParams
-    description = (
-        "Executes a bash command with timeout and output caps. Use workdir instead of cd."
-    )
+    description = "Executes a bash command with timeout and output caps. Use workdir instead of cd."
 
     async def _kill_process_tree(self, proc: asyncio.subprocess.Process) -> None:
         try:
@@ -84,8 +82,20 @@ class BashTool(Tool):
                 return tokens[: ARITY[key]]
         return tokens[:1]
 
-    async def _check_external_dirs(self, tokens: list[str], cwd: Path, ctx: ToolContext) -> None:
-        pathlike_cmds = {"cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"}
+    async def _check_external_dirs(
+        self, tokens: list[str], cwd: Path, ctx: ToolContext
+    ) -> None:
+        pathlike_cmds = {
+            "cd",
+            "rm",
+            "cp",
+            "mv",
+            "mkdir",
+            "touch",
+            "chmod",
+            "chown",
+            "cat",
+        }
         if not tokens:
             return
         if tokens[0] not in pathlike_cmds:
@@ -118,12 +128,18 @@ class BashTool(Tool):
     async def execute(self, params: BashParams, ctx: ToolContext) -> ToolResult:
         command = params.command.strip()
         if not command:
-            return ToolResult(title="bash", output="Empty command.", metadata={"ok": False})
+            return ToolResult(
+                title="bash", output="Empty command.", metadata={"ok": False}
+            )
 
-        project_dir = Path(str(ctx.extra.get("project_dir", "."))).expanduser().resolve()
-        cwd = Path(params.workdir or project_dir).expanduser().resolve()
+        project_dir = ctx.project_root
+        cwd = ctx.resolve_path(params.workdir or str(project_dir))
         if not cwd.exists() or not cwd.is_dir():
-            return ToolResult(title="bash", output="Invalid working directory.", metadata={"ok": False})
+            return ToolResult(
+                title="bash",
+                output="Invalid working directory.",
+                metadata={"ok": False},
+            )
 
         tokens = self._extract_tokens(command)
         await self._check_external_dirs(tokens, cwd, ctx)
@@ -164,7 +180,10 @@ class BashTool(Tool):
                     break
                 output_chunks.append(chunk.decode(errors="ignore"))
                 tail = ("".join(output_chunks))[-MAX_METADATA_LENGTH:]
-                ctx.metadata(title="bash", metadata={"output": tail, "description": params.description})
+                ctx.metadata(
+                    title="bash",
+                    metadata={"output": tail, "description": params.description},
+                )
 
         tasks = []
         if proc.stdout is not None:
@@ -193,6 +212,16 @@ class BashTool(Tool):
         if aborted:
             meta_note.append("aborted")
         status_part = f" status={','.join(meta_note)}" if meta_note else ""
-        output += f"\n<bash_metadata> exit_code={exit_code}{status_part}</bash_metadata>"
+        output += (
+            f"\n<bash_metadata> exit_code={exit_code}{status_part}</bash_metadata>"
+        )
 
-        return ToolResult(title=f"bash: {command}", output=output, metadata={"exit_code": exit_code, "timed_out": timed_out, "aborted": aborted})
+        return ToolResult(
+            title=f"bash: {command}",
+            output=output,
+            metadata={
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "aborted": aborted,
+            },
+        )

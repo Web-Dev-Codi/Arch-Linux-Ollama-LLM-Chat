@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from .utils import check_file_safety
 
 MAX_LINE_LENGTH = 2000
 MAX_RESULTS = 100
@@ -24,7 +24,7 @@ class GrepTool(Tool):
 
     async def execute(self, params: GrepParams, ctx: ToolContext) -> ToolResult:
         pattern = params.pattern
-        search_root = Path(str(params.path or ctx.extra.get("project_dir", "."))).expanduser().resolve()
+        search_root = ctx.resolve_path(params.path or ".")
 
         await ctx.ask(
             permission="grep",
@@ -32,7 +32,7 @@ class GrepTool(Tool):
             always=["*"],
             metadata={"pattern": pattern, "path": str(search_root)},
         )
-        await assert_external_directory(ctx, str(search_root), kind="directory")
+        await check_file_safety(search_root, ctx, assert_not_modified=False)
 
         rg = "rg"
         try:
@@ -80,20 +80,26 @@ class GrepTool(Tool):
 
             out_lines: list[str] = []
             for fp, n, text in entries:
-                snippet = text if len(text) <= MAX_LINE_LENGTH else text[:MAX_LINE_LENGTH]
+                snippet = (
+                    text if len(text) <= MAX_LINE_LENGTH else text[:MAX_LINE_LENGTH]
+                )
                 if len(text) > MAX_LINE_LENGTH:
                     snippet += "..."
                 out_lines.append(f"{fp}:\n  Line {n}: {snippet}")
             output = f"Found {len(entries)} matches\n" + "\n".join(out_lines)
             if truncated:
                 output += "\n... results truncated; refine your query."
-            return ToolResult(title="grep", output=output, metadata={"truncated": truncated})
+            return ToolResult(
+                title="grep", output=output, metadata={"truncated": truncated}
+            )
         except FileNotFoundError:
             # Fallback: Python regex across files
             try:
                 regex = re.compile(pattern)
             except re.error as exc:
-                return ToolResult(title="grep", output=f"Invalid regex: {exc}", metadata={"ok": False})
+                return ToolResult(
+                    title="grep", output=f"Invalid regex: {exc}", metadata={"ok": False}
+                )
 
             files: list[Path] = []
             target = search_root
@@ -118,4 +124,8 @@ class GrepTool(Tool):
             if not matches:
                 return ToolResult(title="grep", output="No files found.", metadata={})
             out_lines = [f"{fp}:\n  Line {n}: {txt}" for fp, n, txt in matches]
-            return ToolResult(title="grep", output=f"Found {len(matches)} matches\n" + "\n".join(out_lines), metadata={})
+            return ToolResult(
+                title="grep",
+                output=f"Found {len(matches)} matches\n" + "\n".join(out_lines),
+                metadata={},
+            )
