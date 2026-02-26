@@ -354,22 +354,20 @@ class TestBackwardCompatibility:
         assert "description" in legacy_schema
         assert "parameters" in legacy_schema
 
-    def test_custom_tools_still_work(self) -> None:
-        """Verify custom_tools.py ToolSpec still works."""
-        from src.ollama_chat.custom_tools import ToolSpec
+    def test_tool_spec_still_works(self) -> None:
+        """Verify ToolSpec still works after migration to tooling.py."""
+        from src.ollama_chat.tooling import ToolSpec
 
-        # Suppress deprecation warning in test
-        with pytest.warns(DeprecationWarning):
-            spec = ToolSpec(
-                name="test",
-                description="Test tool",
-                parameters_schema={
-                    "type": "object",
-                    "properties": {"arg": {"type": "string"}},
-                    "required": ["arg"],
-                },
-                handler=lambda args: f"got: {args['arg']}",
-            )
+        spec = ToolSpec(
+            name="test",
+            description="Test tool",
+            parameters_schema={
+                "type": "object",
+                "properties": {"arg": {"type": "string"}},
+                "required": ["arg"],
+            },
+            handler=lambda args: f"got: {args['arg']}",
+        )
 
         schema = spec.as_ollama_tool()
 

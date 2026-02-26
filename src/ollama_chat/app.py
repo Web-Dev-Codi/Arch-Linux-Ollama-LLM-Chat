@@ -46,7 +46,12 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
-from .tooling import ToolRegistry, ToolRegistryOptions, ToolRuntimeOptions, build_registry
+from .tooling import (
+    ToolRegistry,
+    ToolRegistryOptions,
+    ToolRuntimeOptions,
+    build_registry,
+)
 from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
@@ -521,34 +526,31 @@ class OllamaChatApp(App[None]):
         # ensures the registry is ready when the first tool-capable model loads.
         try:
             tools_cfg = self.config.get("tools", {})
-            options = (
-                ToolRegistryOptions(
-                    web_search_api_key=(
-                        self.capabilities.web_search_api_key
-                        if self.capabilities.web_search_enabled
-                        else None
+            options = ToolRegistryOptions(
+                web_search_api_key=(
+                    self.capabilities.web_search_api_key
+                    if self.capabilities.web_search_enabled
+                    else None
+                ),
+                runtime_options=ToolRuntimeOptions(
+                    enabled=bool(tools_cfg.get("enabled", True)),
+                    workspace_root=str(tools_cfg.get("workspace_root", ".")),
+                    allow_external_directories=bool(
+                        tools_cfg.get("allow_external_directories", False)
                     ),
-                    enable_custom_tools=bool(tools_cfg.get("enabled", True)),
-                    runtime_options=ToolRuntimeOptions(
-                        enabled=bool(tools_cfg.get("enabled", True)),
-                        workspace_root=str(tools_cfg.get("workspace_root", ".")),
-                        allow_external_directories=bool(
-                            tools_cfg.get("allow_external_directories", False)
-                        ),
-                        command_timeout_seconds=int(
-                            tools_cfg.get("command_timeout_seconds", 30)
-                        ),
-                        max_output_lines=int(tools_cfg.get("max_output_lines", 200)),
-                        max_output_bytes=int(tools_cfg.get("max_output_bytes", 50_000)),
-                        max_read_bytes=int(tools_cfg.get("max_read_bytes", 200_000)),
-                        max_search_results=int(tools_cfg.get("max_search_results", 200)),
-                        default_external_directories=tuple(
-                            str(item)
-                            for item in tools_cfg.get("default_external_directories", [])
-                            if str(item).strip()
-                        ),
+                    command_timeout_seconds=int(
+                        tools_cfg.get("command_timeout_seconds", 30)
                     ),
-                )
+                    max_output_lines=int(tools_cfg.get("max_output_lines", 200)),
+                    max_output_bytes=int(tools_cfg.get("max_output_bytes", 50_000)),
+                    max_read_bytes=int(tools_cfg.get("max_read_bytes", 200_000)),
+                    max_search_results=int(tools_cfg.get("max_search_results", 200)),
+                    default_external_directories=tuple(
+                        str(item)
+                        for item in tools_cfg.get("default_external_directories", [])
+                        if str(item).strip()
+                    ),
+                ),
             )
             self._tool_registry: ToolRegistry | None = build_registry(options)
         except OllamaToolError as exc:

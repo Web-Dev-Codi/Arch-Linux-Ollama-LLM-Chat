@@ -112,8 +112,8 @@ class ToolRegistryTests(unittest.TestCase):
         # Second registration overwrites the first (same name key).
         self.assertEqual(len(registry.build_tools_list()), 1)
 
-    def test_schema_tools_are_exported_when_custom_tools_enabled(self) -> None:
-        registry = build_registry(ToolRegistryOptions(enable_custom_tools=True))
+    def test_schema_tools_are_exported(self) -> None:
+        registry = build_registry(ToolRegistryOptions())
         tools = registry.build_tools_list()
         schema_tools = [item for item in tools if isinstance(item, dict)]
         self.assertTrue(
@@ -124,7 +124,7 @@ class ToolRegistryTests(unittest.TestCase):
         )
 
     def test_builtin_adapter_allowlist_and_execution(self) -> None:
-        # Built-in adapter is enabled by default; custom tools disabled.
+        # Built-in tools package is enabled by default.
         from pathlib import Path
         import tempfile
 
@@ -132,16 +132,15 @@ class ToolRegistryTests(unittest.TestCase):
             root = Path(tmp)
             registry = build_registry(
                 ToolRegistryOptions(
-                    enable_custom_tools=False,
                     runtime_options=ToolRuntimeOptions(workspace_root=str(root)),
                 )
             )
             names = set(registry.list_tool_names())
-            # Exactly the allowlist should be present from built-ins
+            # Built-in tools should be present
             for name in {"codesearch", "edit", "grep", "list", "read"}:
                 self.assertIn(name, names)
-            # Sanity: non-allowlisted names from custom suite should not be present
-            self.assertNotIn("write", names)
+            # Write tool should also be present now (no longer filtered)
+            self.assertIn("write", names)
 
             # Verify read executes by creating a file and reading it
             target = root / "foo.txt"
@@ -154,14 +153,13 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertIn("Found", grep_out)
 
     def test_schema_tool_validation_rejects_missing_required_argument(self) -> None:
-        registry = build_registry(ToolRegistryOptions(enable_custom_tools=True))
+        registry = build_registry(ToolRegistryOptions())
         with self.assertRaises(OllamaToolError):
             registry.execute("read", {})
 
     def test_truncation_applies_to_schema_tool_outputs(self) -> None:
         registry = build_registry(
             ToolRegistryOptions(
-                enable_custom_tools=True,
                 runtime_options=registry_runtime_options(
                     max_output_lines=2,
                     max_output_bytes=5000,

@@ -14,7 +14,6 @@ import threading
 import time
 from typing import Any
 
-from .custom_tools import CustomToolSuite, ToolRuntimeOptions, ToolSpec
 from .exceptions import OllamaToolError
 from .tools.base import ToolContext
 
@@ -26,6 +25,52 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency.
     _ollama_web_fetch = None  # type: ignore[assignment]
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ToolRuntimeOptions:
+    """Runtime limits and safety controls for local tools.
+
+    Moved from custom_tools.py during Phase 1 refactoring.
+    """
+
+    enabled: bool = True
+    workspace_root: str = "."
+    allow_external_directories: bool = False
+    command_timeout_seconds: int = 30
+    max_output_lines: int = 200
+    max_output_bytes: int = 50_000
+    max_read_bytes: int = 200_000
+    max_search_results: int = 200
+    default_external_directories: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """JSON-schema function tool definition + handler.
+
+    Moved from custom_tools.py during Phase 1 refactoring.
+    Provides schema-based tool registration for ToolsPackageAdapter.
+    """
+
+    name: str
+    description: str
+    parameters_schema: dict[str, Any]
+    handler: Callable[[dict[str, Any]], str]
+    safety_level: str = "safe"
+    category: str = "meta"
+
+    def as_ollama_tool(self) -> dict[str, Any]:
+        """Render the tool in Ollama's function schema format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            },
+        }
+
 
 # Serialise all temporary env-var mutations so that concurrent threads
 # (e.g. when tool execution is offloaded via asyncio.to_thread) cannot
@@ -376,7 +421,6 @@ class ToolRegistryOptions:
     """
 
     web_search_api_key: str | None = None
-    enable_custom_tools: bool = False
     enable_builtin_tools: bool = True
     runtime_options: ToolRuntimeOptions = field(default_factory=ToolRuntimeOptions)
 
@@ -386,8 +430,8 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
 
     - Optional callable-based web_search/web_fetch registration remains for
       backward compatibility.
-    - Optional schema-based custom coding tools are registered when
-      ``enable_custom_tools`` is true.
+    - Built-in tools from tools/ package are registered when
+      ``enable_builtin_tools`` is true (default).
     """
     runtime = options.runtime_options if options is not None else ToolRuntimeOptions()
     registry = ToolRegistry(runtime_options=runtime)
@@ -409,29 +453,13 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
             extra={"event": "tools.web_search.enabled"},
         )
 
-    # Register built-in class-based tools first so that custom tools may override
-    # duplicate names when both systems are enabled.
-    builtin_names: set[str] = set()
+    # Register built-in class-based tools from tools/ package
     if options.enable_builtin_tools:
         adapter = ToolsPackageAdapter(options.runtime_options)
         builtin_specs = adapter.to_specs()
         for spec in builtin_specs:
             registry.register_spec(spec)
-            builtin_names.add(spec.name)
 
-    if options.enable_custom_tools:
-        suite = CustomToolSuite(
-            runtime_options=options.runtime_options,
-            web_search_fn=web_search_fn,
-            web_fetch_fn=web_fetch_fn,
-        )
-        suite.bind_executor(registry.execute)
-        for spec in suite.specs():
-            # Prefer built-in implementations for overlapping names in the initial
-            # allowlist (read, edit, grep, codesearch, list). Skip duplicates.
-            if spec.name in builtin_names:
-                continue
-            registry.register_spec(spec)
     return registry
 
 
