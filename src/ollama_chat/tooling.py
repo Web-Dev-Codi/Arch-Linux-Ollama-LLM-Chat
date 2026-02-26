@@ -83,7 +83,6 @@ class ToolsPackageAdapter:
         self._metadata_cb = metadata_cb
 
     def to_specs(self) -> list[ToolSpec]:
-        allow = {"codesearch", "edit", "grep", "list", "read"}
         specs: list[ToolSpec] = []
         # Ensure modules that import `from support import ...` can resolve the local
         # package alias (ollama_chat.support) without modifying their import lines.
@@ -99,7 +98,7 @@ class ToolsPackageAdapter:
             tools = []
         for tool in tools:
             name = getattr(tool, "id", "")
-            if not name or name not in allow:
+            if not name:
                 continue
             try:
                 schema = tool.params_schema.model_json_schema()
