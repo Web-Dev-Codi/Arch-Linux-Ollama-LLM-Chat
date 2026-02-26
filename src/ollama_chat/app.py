@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 import inspect
 import logging
 import os
-import sys
+from pathlib import Path
 import random
 import shutil
 import subprocess
-from pathlib import Path
-from collections.abc import Awaitable, Callable
+import sys
 from typing import Any
 from urllib.parse import urlparse
 
@@ -24,7 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
-from .chat import CapabilityReport, OllamaChat, ChatSendOptions
+from .chat import CapabilityReport, ChatSendOptions, OllamaChat
 from .commands import parse_inline_directives
 from .config import load_config
 from .exceptions import (
@@ -46,11 +46,11 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
-from .tools import ToolRegistry, build_registry, ToolRegistryOptions
+from .tooling import ToolRegistry, ToolRegistryOptions, ToolRuntimeOptions, build_registry
+from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
 from .widgets.message import MessageBubble
-from .widgets.activity_bar import ActivityBar
 from .widgets.status_bar import StatusBar
 
 LOGGER = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ async def _open_native_file_dialog(
                         cleaned = token.strip("',()><[]")
                         if cleaned.startswith("file://"):
                             return urllib.parse.unquote(cleaned[len("file://") :])
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     # --- zenity ---
@@ -137,7 +137,7 @@ async def _open_native_file_dialog(
                 path = stdout.decode().strip()
                 if path:
                     return path
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     # --- kdialog ---
@@ -158,7 +158,7 @@ async def _open_native_file_dialog(
                 path = stdout.decode().strip()
                 if path:
                     return path
-        except (asyncio.TimeoutError, OSError):
+        except (TimeoutError, OSError):
             pass
 
     return None
@@ -520,13 +520,34 @@ class OllamaChatApp(App[None]):
         # used is gated at call time by _effective_caps.tools_enabled.  This
         # ensures the registry is ready when the first tool-capable model loads.
         try:
+            tools_cfg = self.config.get("tools", {})
             options = (
                 ToolRegistryOptions(
                     web_search_api_key=(
                         self.capabilities.web_search_api_key
                         if self.capabilities.web_search_enabled
                         else None
-                    )
+                    ),
+                    enable_custom_tools=bool(tools_cfg.get("enabled", True)),
+                    runtime_options=ToolRuntimeOptions(
+                        enabled=bool(tools_cfg.get("enabled", True)),
+                        workspace_root=str(tools_cfg.get("workspace_root", ".")),
+                        allow_external_directories=bool(
+                            tools_cfg.get("allow_external_directories", False)
+                        ),
+                        command_timeout_seconds=int(
+                            tools_cfg.get("command_timeout_seconds", 30)
+                        ),
+                        max_output_lines=int(tools_cfg.get("max_output_lines", 200)),
+                        max_output_bytes=int(tools_cfg.get("max_output_bytes", 50_000)),
+                        max_read_bytes=int(tools_cfg.get("max_read_bytes", 200_000)),
+                        max_search_results=int(tools_cfg.get("max_search_results", 200)),
+                        default_external_directories=tuple(
+                            str(item)
+                            for item in tools_cfg.get("default_external_directories", [])
+                            if str(item).strip()
+                        ),
+                    ),
                 )
             )
             self._tool_registry: ToolRegistry | None = build_registry(options)

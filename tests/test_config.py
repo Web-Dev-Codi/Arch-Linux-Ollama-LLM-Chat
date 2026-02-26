@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
+import tempfile
 import unittest
 
 from ollama_chat.config import DEFAULT_CONFIG, load_config
@@ -38,6 +38,11 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(
                 config["logging"]["level"], DEFAULT_CONFIG["logging"]["level"]
             )
+            self.assertEqual(config["tools"]["enabled"], DEFAULT_CONFIG["tools"]["enabled"])
+            self.assertEqual(
+                config["tools"]["workspace_root"],
+                DEFAULT_CONFIG["tools"]["workspace_root"],
+            )
 
     def test_partial_config_overrides_selected_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -58,9 +63,42 @@ show_timestamps = false
             self.assertEqual(config["ollama"]["models"], ["qwen2.5", "llama3.2"])
             self.assertFalse(config["ui"]["show_timestamps"])
             self.assertEqual(config["app"]["title"], DEFAULT_CONFIG["app"]["title"])
+            self.assertEqual(config["tools"]["workspace_root"], DEFAULT_CONFIG["tools"]["workspace_root"])
             self.assertEqual(
                 config["security"]["allow_remote_hosts"],
                 DEFAULT_CONFIG["security"]["allow_remote_hosts"],
+            )
+
+    def test_tools_section_overrides_selected_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(
+                """
+[tools]
+enabled = true
+workspace_root = "~/workspace"
+allow_external_directories = true
+command_timeout_seconds = 45
+max_output_lines = 300
+max_output_bytes = 123456
+max_read_bytes = 654321
+max_search_results = 25
+default_external_directories = ["/tmp", "~/sandbox"]
+                """.strip(),
+                encoding="utf-8",
+            )
+            config = load_config(config_path=config_path)
+            self.assertTrue(config["tools"]["enabled"])
+            self.assertEqual(config["tools"]["workspace_root"], "~/workspace")
+            self.assertTrue(config["tools"]["allow_external_directories"])
+            self.assertEqual(config["tools"]["command_timeout_seconds"], 45)
+            self.assertEqual(config["tools"]["max_output_lines"], 300)
+            self.assertEqual(config["tools"]["max_output_bytes"], 123456)
+            self.assertEqual(config["tools"]["max_read_bytes"], 654321)
+            self.assertEqual(config["tools"]["max_search_results"], 25)
+            self.assertEqual(
+                config["tools"]["default_external_directories"],
+                ["/tmp", "~/sandbox"],
             )
 
     def test_models_fallback_to_single_model_when_models_missing(self) -> None:

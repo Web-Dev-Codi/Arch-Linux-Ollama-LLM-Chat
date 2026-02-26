@@ -51,6 +51,22 @@ enabled = false
 directory = "~/.local/state/ollamaterm/conversations"
 metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
+[tools]
+# Enable schema-first custom coding tools (read/write/search/edit/bash/plan/todo/etc.)
+enabled = true
+# Base root for relative paths in file/search/edit tools.
+workspace_root = "."
+# Allow adding temporary external roots via external-directory tool.
+allow_external_directories = false
+# Safety/runtime limits.
+command_timeout_seconds = 30
+max_output_lines = 200
+max_output_bytes = 50000
+max_read_bytes = 200000
+max_search_results = 200
+# Optional always-allowed external roots.
+default_external_directories = []
+
 [capabilities]
 # Whether to render the model's reasoning trace in the assistant bubble.
 # The trace is shown only when the active model supports thinking (auto-detected).

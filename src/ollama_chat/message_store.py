@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
-from typing import Any, Iterable
+from typing import Any
 
 # Public message type (no internal fields).
 Message = dict[str, Any]

@@ -26,7 +26,7 @@ class PackageExportTests(unittest.TestCase):
 
     def test_unknown_symbol_raises_attribute_error(self) -> None:
         with self.assertRaises(AttributeError):
-            getattr(ollama_chat, "THIS_DOES_NOT_EXIST")
+            ollama_chat.THIS_DOES_NOT_EXIST
 
 
 if __name__ == "__main__":

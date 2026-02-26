@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import structlog
-
 
 
 def _best_effort_private_permissions(path: Path) -> None:

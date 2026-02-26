@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.message import Message
 from textual.timer import Timer
-from textual.widgets import Button, Label, Static
+from textual.widgets import Label, Static
 
 LOGGER = logging.getLogger(__name__)
 
