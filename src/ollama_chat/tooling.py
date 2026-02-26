@@ -16,6 +16,7 @@ from typing import Any
 
 from .exceptions import OllamaToolError
 from .tools.base import ToolContext
+from .tools.truncation import truncate_output
 
 try:
     from ollama import web_fetch as _ollama_web_fetch
@@ -114,28 +115,6 @@ def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = old_value
-
-
-def _truncate_output(text: str, max_lines: int, max_bytes: int) -> tuple[str, bool]:
-    """Apply deterministic truncation by byte and line limits."""
-    truncated = False
-    result = text
-
-    if max_bytes > 0:
-        encoded = result.encode("utf-8", errors="ignore")
-        if len(encoded) > max_bytes:
-            truncated = True
-            clipped = encoded[:max_bytes]
-            result = clipped.decode("utf-8", errors="ignore")
-            result += "\n... [truncated by byte limit]"
-
-    if max_lines > 0:
-        lines = result.splitlines()
-        if len(lines) > max_lines:
-            truncated = True
-            result = "\n".join(lines[:max_lines] + ["... [truncated by line limit]"])
-
-    return result, truncated
 
 
 class ToolsPackageAdapter:
@@ -377,12 +356,14 @@ class ToolRegistry:
             try:
                 # ToolSpec handlers do their own validation if needed
                 result = str(spec.handler(arguments))
-                truncated, _ = _truncate_output(
-                    result,
-                    max_lines=self._runtime_options.max_output_lines,
-                    max_bytes=self._runtime_options.max_output_bytes,
+                trunc_result = _run_async_from_sync(
+                    truncate_output(
+                        result,
+                        max_lines=self._runtime_options.max_output_lines,
+                        max_bytes=self._runtime_options.max_output_bytes,
+                    )
                 )
-                return truncated
+                return trunc_result.content
             except OllamaToolError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -394,12 +375,14 @@ class ToolRegistry:
 
         try:
             result = str(fn(**arguments))
-            truncated, _ = _truncate_output(
-                result,
-                max_lines=self._runtime_options.max_output_lines,
-                max_bytes=self._runtime_options.max_output_bytes,
+            trunc_result = _run_async_from_sync(
+                truncate_output(
+                    result,
+                    max_lines=self._runtime_options.max_output_lines,
+                    max_bytes=self._runtime_options.max_output_bytes,
+                )
             )
-            return truncated
+            return trunc_result.content
         except OllamaToolError:
             raise
         except Exception as exc:  # noqa: BLE001 - tool functions can fail arbitrarily.
