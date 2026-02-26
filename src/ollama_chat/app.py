@@ -47,6 +47,7 @@ from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
 from .managers.connection import ConnectionManager
+from .managers.capability import CapabilityManager
 from .tooling import (
     ToolRegistry,
     ToolRegistryOptions,
@@ -509,23 +510,14 @@ class OllamaChatApp(App[None]):
         # Capabilities configuration (user preferences from config — the ceiling).
         self.capabilities = CapabilityContext.from_config(self.config)
 
-        # Per-model runtime capabilities fetched from Ollama's /api/show.
-        # known=False means capabilities metadata is unavailable; effective caps fall
-        # back to config flags unchanged.
-        self._model_caps: CapabilityReport = CapabilityReport(
-            caps=frozenset(), known=False
-        )
-
-        # Effective capabilities start permissive (all auto-detected fields = True)
-        # and are refined once ensure_model_ready() returns /api/show data.
-        self._effective_caps: CapabilityContext = CapabilityContext(
-            think=True,
-            tools_enabled=True,
-            vision_enabled=True,
-            show_thinking=self.capabilities.show_thinking,
-            web_search_enabled=self.capabilities.web_search_enabled,
-            web_search_api_key=self.capabilities.web_search_api_key,
-            max_tool_iterations=self.capabilities.max_tool_iterations,
+        # Initialize capability manager
+        self.capability_manager = CapabilityManager(
+            self.chat,
+            user_preferences={
+                "show_thinking": self.capabilities.show_thinking,
+                "web_search_enabled": self.capabilities.web_search_enabled,
+                "max_tool_iterations": self.capabilities.max_tool_iterations,
+            },
         )
 
         # Build the tool registry unconditionally — whether tools are actually
@@ -895,8 +887,7 @@ class OllamaChatApp(App[None]):
                 await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
             self.connection_manager._state = ConnectionState.ONLINE
             # Detect what this model actually supports and update effective caps.
-            self._model_caps = await self.chat.show_model_capabilities()
-            self._update_effective_caps()
+            await self.capability_manager.detect_model_capabilities()
             self._set_idle_sub_title(f"Model ready: {self.chat.model}")
         except OllamaConnectionError:
             self.connection_manager._state = ConnectionState.OFFLINE
@@ -912,70 +903,6 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Failed while preparing model."
         except OllamaChatError:
             self.sub_title = "Model preparation failed."
-
-    def _update_effective_caps(self) -> None:
-        """Recompute _effective_caps purely from Ollama's /api/show response.
-
-        The three model-capability fields (``think``, ``tools_enabled``,
-        ``vision_enabled``) are set **solely** by auto-detection — there are no
-        longer config flags for them.  User preferences (``show_thinking``,
-        ``web_search_*``, ``max_tool_iterations``) are always taken from
-        ``self.capabilities`` which is loaded from the ``[capabilities]`` config
-        section.
-
-        When capability metadata is unknown (``show()`` unavailable or the
-        response has no ``capabilities`` field — old Ollama versions, custom
-        models), all three auto-detected fields default to ``True`` (permissive
-        fallback) so that nothing is silently disabled.
-
-        When metadata is known, each field is set to ``True`` only when the
-        model explicitly reports that capability in its ``capabilities`` array.
-        ``web_search`` additionally requires the model to support tools.
-        """
-        if not self._model_caps.known:
-            # Unknown — permissive fallback: assume everything is supported.
-            self._effective_caps = CapabilityContext(
-                think=True,
-                tools_enabled=True,
-                vision_enabled=True,
-                show_thinking=self.capabilities.show_thinking,
-                web_search_enabled=self.capabilities.web_search_enabled,
-                web_search_api_key=self.capabilities.web_search_api_key,
-                max_tool_iterations=self.capabilities.max_tool_iterations,
-            )
-            return
-
-        caps = self._model_caps.caps
-        tools_supported = "tools" in caps
-
-        self._effective_caps = CapabilityContext(
-            # Auto-detected from /api/show.
-            think="thinking" in caps,
-            tools_enabled=tools_supported,
-            # web_search requires tool-calling; disable when model can't do tools.
-            vision_enabled="vision" in caps,
-            # User / app preferences — always from config.
-            show_thinking=self.capabilities.show_thinking,
-            web_search_enabled=self.capabilities.web_search_enabled and tools_supported,
-            web_search_api_key=self.capabilities.web_search_api_key,
-            max_tool_iterations=self.capabilities.max_tool_iterations,
-        )
-
-        # Log which capabilities this model does not support.
-        for enabled, feature in [
-            (self._effective_caps.think, "thinking"),
-            (self._effective_caps.tools_enabled, "tools"),
-            (self._effective_caps.vision_enabled, "vision"),
-        ]:
-            if not enabled:
-                LOGGER.info(
-                    "app.capability.not_supported",
-                    extra={
-                        "event": "app.capability.not_supported",
-                        "feature": feature,
-                        "model": self.chat.model,
-                    },
-                )
 
     def _apply_theme(self) -> None:
         """Apply fallback theme settings and restyle mounted widgets."""
@@ -1061,7 +988,7 @@ class OllamaChatApp(App[None]):
             model=self.chat.model,
             message_count=message_count,
             estimated_tokens=self.chat.estimated_context_tokens,
-            effective_caps=getattr(self, "_effective_caps", None),
+            effective_caps=self.capability_manager.effective_capabilities,
         )
 
     async def _open_configured_model_picker(self) -> None:
@@ -1103,23 +1030,12 @@ class OllamaChatApp(App[None]):
             self.connection_manager._state = ConnectionState.ONLINE
 
             # Fetch this model's actual capabilities and recompute effective flags.
-            self._model_caps = await self.chat.show_model_capabilities(model_name)
-            self._update_effective_caps()
+            await self.capability_manager.detect_model_capabilities(model_name)
 
             # Build a subtitle reporting which capabilities this model lacks.
-            # Since auto-detection is now the sole authority, we report what
-            # /api/show told us rather than comparing against removed config flags.
-            unsupported = [
-                cap
-                for enabled, cap in [
-                    (self._effective_caps.think, "thinking"),
-                    (self._effective_caps.tools_enabled, "tools"),
-                    (self._effective_caps.vision_enabled, "vision"),
-                ]
-                if not enabled
-            ]
+            unsupported = self.capability_manager.get_unsupported_features()
             msg = f"Active model: {model_name}"
-            if unsupported and self._model_caps.known:
+            if unsupported and self.capability_manager.model_capabilities.known:
                 msg += f"  |  Not supported: {', '.join(unsupported)}"
             self._set_idle_sub_title(msg)
         except OllamaChatError as exc:  # noqa: BLE001
@@ -1167,7 +1083,7 @@ class OllamaChatApp(App[None]):
             content=content,
             role=role,
             timestamp=timestamp,
-            show_thinking=self._effective_caps.show_thinking,
+            show_thinking=self.capability_manager.effective_capabilities.show_thinking,
         )
         self._style_bubble(bubble, role)
         return bubble
@@ -1215,7 +1131,7 @@ class OllamaChatApp(App[None]):
         self, _message: InputBox.AttachRequested
     ) -> None:
         """Open native image picker when attach button is clicked."""
-        if not self._effective_caps.vision_enabled:
+        if not self.capability_manager.effective_capabilities.vision_enabled:
             self.sub_title = "Vision is not supported by this model."
             return
         await self._open_attachment_dialog("image")
@@ -1293,7 +1209,10 @@ class OllamaChatApp(App[None]):
             expanded = os.path.expanduser(path)
             if not os.path.isfile(expanded):
                 continue
-            if self._is_image_path(expanded) and self._effective_caps.vision_enabled:
+            if (
+                self._is_image_path(expanded)
+                and self.capability_manager.effective_capabilities.vision_enabled
+            ):
                 self._attachments.add_image(expanded)
                 added_images += 1
             else:
@@ -1428,10 +1347,12 @@ class OllamaChatApp(App[None]):
             opts = ChatSendOptions(
                 images=images or None,
                 tool_registry=(
-                    self._tool_registry if self._effective_caps.tools_enabled else None
+                    self._tool_registry
+                    if self.capability_manager.effective_capabilities.tools_enabled
+                    else None
                 ),
-                think=self._effective_caps.think,
-                max_tool_iterations=self._effective_caps.max_tool_iterations,
+                think=self.capability_manager.effective_capabilities.think,
+                max_tool_iterations=self.capability_manager.effective_capabilities.max_tool_iterations,
             )
             async for chunk in self.chat.send(user_text, options=opts):
                 if chunk.kind == "thinking":
@@ -1708,7 +1629,9 @@ class OllamaChatApp(App[None]):
             if await self._dispatch_slash_command(raw_text):
                 return
 
-        directives = parse_inline_directives(raw_text, self._effective_caps)
+        directives = parse_inline_directives(
+            raw_text, self.capability_manager.effective_capabilities
+        )
         user_text = directives.cleaned_text
         inline_images = directives.image_paths
         inline_files = directives.file_paths
