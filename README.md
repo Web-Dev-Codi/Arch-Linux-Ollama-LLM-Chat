@@ -373,6 +373,87 @@ coding toolset designed for agentic workflows:
 These tools are controlled by the `[tools]` config section and are constrained
 by workspace-root path checks, command timeouts, and output truncation limits.
 
+#### Function tools with Ollama (alpha/experimental)
+
+OllamaTerm passes tools to the Ollama Python SDK in two forms:
+
+- JSON function tools generated from the schema-first tool specs (the majority of tools below)
+- Python callables for built-in Ollama integrations when enabled (e.g. `web_search`, `web_fetch`)
+
+The model emits `tool_calls`, the app executes them, appends a `tool` role message with the result, and continues the loop until the assistant returns a final answer.
+
+> Warning: This tool suite is experimental. Most tools are untested and may be buggy or missing edge-case handling. Use with caution and review changes carefully, especially file edits. Outputs may be truncated according to configured limits.
+
+##### Available tools (names and key parameters)
+
+- Files & search
+  - `list` (built-in) — List files and directories.
+    - `path?: string` (default: workspace root)
+  - `ls` (custom) — Alternate directory listing with tree-style output.
+    - `path?: string`, `ignore?: string[]`
+  - `read` — Read a file window.
+    - `path: string`, `offset?: int`, `limit?: int`
+  - `glob` — Find files by glob.
+    - `pattern: string`, `path?: string`, `max_results?: int`
+  - `grep` / `codesearch` — Search file contents.
+    - `query: string`, `path?: string`, `case_sensitive?: bool`, `fixed_strings?: bool`, `max_results?: int`
+
+- Editing
+  - `write` — Atomic full-file write.
+    - `path: string`, `content: string`, `overwrite?: bool`, `create_dirs?: bool`
+  - `edit` — Single snippet replace.
+    - `path: string`, `old_text: string`, `new_text: string`, `replace_all?: bool`
+  - `multiedit` — Multiple snippet edits atomically.
+    - `path: string`, `edits: { old_text, new_text, replace_all? }[]`
+  - `apply_patch` — Apply structured patch hunks.
+    - `path: string`, `hunks: { old_text, new_text, replace_all? }[]`
+
+- Runtime
+  - `bash` — Run a shell command (capped by time/output limits).
+    - `command: string`, `cwd?: string`
+  - `batch` — Run a sequence of tool calls.
+    - `calls: { name: string, arguments: object }[]`, `continue_on_error?: bool`
+  - `external-directory` — Manage temporary external directory allowlist for this session.
+    - `action: string`, `path?: string`
+
+- Planning & state
+  - `plan-enter` | `plan-exit` | `plan`
+    - `plan-enter: { goal?: string }`
+    - `plan: { action?: string, content?: string }`
+  - `todo` | `todoread` | `todowrite` | `task`
+    - `todo: { item: string }`
+    - `todowrite: { items: string[], mode?: "append"|"replace" }`
+    - `task: { action?: string, name?: string, status?: string }`
+  - `question` — Emit a structured clarification question.
+    - `prompt: string`, `context?: string`
+
+- Introspection & utility
+  - `registry` — List available tools.
+  - `tool` — Inspect a tool definition.
+  - `truncation` — Show output truncation limits.
+  - `invalid` — Always fails (for error-path testing).
+
+- Web (requires tool-capable model; `web_search_enabled = true` and an API key)
+  - `websearch` — Perform a web search via Ollama integration.
+    - `query: string`, `max_results?: int`
+  - `webfetch` — Fetch a URL via Ollama integration.
+    - `url: string`
+
+Notes:
+
+- Directory listing may appear as `list` (built-in) or `ls` (custom) depending on which tool set is active. Both list files; prefer `list` when available.
+- File and command tools will prompt for permission. Paths are restricted to the configured workspace by default.
+- Large outputs are truncated. Use `offset`/`limit` (for `read`) and `max_results` (for `grep`/`glob`) to scope results.
+
+##### Quick examples
+
+```text
+List files here → Call tool: list { "path": "." }
+Search for a string → Call tool: grep { "query": "TODO", "path": "." }
+Read a file window → Call tool: read { "path": "src/main.py", "offset": 1, "limit": 120 }
+Make an edit → Call tool: edit { "path": "README.md", "old_text": "foo", "new_text": "bar", "replace_all": true }
+```
+
 ### Web search
 
 Set `web_search_enabled = true` in `[capabilities]` and provide an Ollama API
