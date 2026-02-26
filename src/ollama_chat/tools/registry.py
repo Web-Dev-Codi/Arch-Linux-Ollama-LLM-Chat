@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .apply_patch_tool import ApplyPatchTool
 from .base import Tool
@@ -44,9 +45,38 @@ class ToolRegistry:
     def all(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def tools_for_model(self, provider_id: str | None = None, model_id: str | None = None, agent: str | None = None) -> list[Tool]:  # noqa: D401 - simple
+    def tools_for_model(
+        self,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        agent: str | None = None,
+    ) -> list[Tool]:  # noqa: D401 - simple
         # Minimal filtering: return all built-ins. Environment gating is not enforced here.
         return self.all()
+
+    def build_ollama_tools(self) -> list[dict[str, Any]]:
+        """Build Ollama-formatted tool list with proper schema wrapping.
+
+        Returns a list of tools in Ollama's expected format:
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool_name",
+                    "description": "...",
+                    "parameters": {...}
+                }
+            },
+            ...
+        ]
+
+        This method replaces the old pattern of mixing callable functions
+        with schema dicts.
+        """
+        tools: list[dict[str, Any]] = []
+        for tool in self.all():
+            tools.append(tool.to_ollama_schema())
+        return tools
 
     @classmethod
     def build_default(cls) -> ToolRegistry:

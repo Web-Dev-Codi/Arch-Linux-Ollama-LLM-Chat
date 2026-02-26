@@ -1,9 +1,26 @@
-"""Schema-first custom coding tools for Ollama function calling."""
+"""Schema-first custom coding tools for Ollama function calling.
+
+DEPRECATION NOTICE (v2.0):
+This module is being phased out in favor of the unified tools/ package system.
+ToolSpec.as_ollama_tool() will continue to work for backward compatibility,
+but new tools should use the tools/base.py Tool class with to_ollama_schema().
+
+Migration guide: See docs/TOOLS_MIGRATION_GUIDE.md
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import warnings
+
+# Emit deprecation warning once when module is imported
+warnings.warn(
+    "custom_tools.py is deprecated and will be removed in v3.0. "
+    "Use tools/base.py Tool class instead. See docs/TOOLS_MIGRATION_GUIDE.md",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import fnmatch
 import json
 import os
@@ -1023,7 +1040,9 @@ class CustomToolSuite:
 
             try:
                 result = self._executor(name, call_args)
-                rows.append({"index": index, "name": name, "ok": True, "result": result})
+                rows.append(
+                    {"index": index, "name": name, "ok": True, "result": result}
+                )
             except OllamaToolError as exc:
                 rows.append(
                     {

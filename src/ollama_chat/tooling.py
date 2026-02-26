@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import asyncio
+import concurrent.futures
 from dataclasses import dataclass, field
+from inspect import Parameter, signature
 import logging
 import os
 import sys
@@ -29,6 +31,26 @@ LOGGER = logging.getLogger(__name__)
 # (e.g. when tool execution is offloaded via asyncio.to_thread) cannot
 # observe each other's transient OLLAMA_API_KEY value.
 _env_lock = threading.Lock()
+
+
+def _run_async_from_sync(coro):
+    """Run async coroutine from sync context, handling existing event loops.
+
+    If called from within an async context (existing event loop), runs the
+    coroutine in a new thread with its own event loop.
+
+    If called from sync context (no running loop), creates a new event loop.
+    """
+    try:
+        # Check if there's a running loop
+        loop = asyncio.get_running_loop()
+        # We're in an async context - need to run in a new thread with new loop
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    except RuntimeError:
+        # No running loop - safe to create one
+        return asyncio.run(coro)
 
 
 def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
@@ -88,11 +110,13 @@ class ToolsPackageAdapter:
         # package alias (ollama_chat.support) without modifying their import lines.
         try:
             import ollama_chat.support as _support_pkg  # type: ignore[import-not-found]
+
             sys.modules.setdefault("support", _support_pkg)
         except Exception:
             pass
         try:
             from .tools.registry import get_registry  # local/lazy import
+
             tools = get_registry().tools_for_model()
         except Exception:
             tools = []
@@ -100,10 +124,39 @@ class ToolsPackageAdapter:
             name = getattr(tool, "id", "")
             if not name:
                 continue
+
+            # Use the NEW to_ollama_schema() method which returns proper format
             try:
-                schema = tool.params_schema.model_json_schema()
+                ollama_schema = tool.to_ollama_schema()
+                # Extract the inner function dict for the parameters
+                func_dict = ollama_schema.get("function", {})
+                schema = func_dict.get(
+                    "parameters",
+                    {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": True,
+                    },
+                )
+            except AttributeError:
+                # Fallback to legacy schema() method for old tools
+                try:
+                    legacy = tool.schema()
+                    schema = legacy.get(
+                        "parameters",
+                        {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                        },
+                    )
+                except Exception:
+                    schema = {"type": "object", "properties": {}, "required": []}
             except Exception:
                 schema = {"type": "object", "properties": {}, "required": []}
+
+            # Ensure schema has correct structure
             if schema.get("type") != "object":
                 schema = {
                     "type": "object",
@@ -134,7 +187,7 @@ class ToolsPackageAdapter:
                         result = await t.run(args, ctx)
                         return str(result.output)
 
-                    return asyncio.run(_run())
+                    return _run_async_from_sync(_run())
 
                 return handler
 
@@ -183,87 +236,91 @@ class ToolRegistry:
         names = set(self._tools.keys()) | set(self._specs.keys())
         return sorted(names)
 
-    def build_tools_list(self) -> list[Any]:
-        """Return callable and schema tools for passing to the Ollama SDK."""
-        callables = list(self._tools.values())
-        schema_tools = [spec.as_ollama_tool() for spec in self._specs.values()]
-        return callables + schema_tools
+    def build_tools_list(self) -> list[dict[str, Any]]:
+        """Return Ollama-formatted tool schemas (no raw callables).
 
-    def _validate_value(self, name: str, value: Any, schema: dict[str, Any]) -> None:
-        expected = schema.get("type")
-        if expected is None:
-            return
+        Converts all registered tools (both callables and ToolSpecs) into
+        properly formatted Ollama tool schemas with the structure:
+        {
+            "type": "function",
+            "function": {
+                "name": "...",
+                "description": "...",
+                "parameters": {...}
+            }
+        }
+        """
+        schemas: list[dict[str, Any]] = []
 
-        if expected == "string":
-            if not isinstance(value, str):
-                raise OllamaToolError(f"Argument {name!r} must be a string.")
-            return
+        # Convert callable tools to schemas via introspection
+        for name, fn in self._tools.items():
+            try:
+                sig = signature(fn)
+                params: dict[str, Any] = {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": True,
+                }
 
-        if expected == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be an integer.")
-            return
+                for param_name, param in sig.parameters.items():
+                    if param_name in ("self", "cls"):
+                        continue
 
-        if expected == "number":
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be numeric.")
-            return
+                    # Extract type hint if available
+                    param_type = "string"  # Default
+                    if param.annotation != Parameter.empty:
+                        ann_str = str(param.annotation).lower()
+                        if "int" in ann_str:
+                            param_type = "integer"
+                        elif "float" in ann_str or "number" in ann_str:
+                            param_type = "number"
+                        elif "bool" in ann_str:
+                            param_type = "boolean"
+                        elif "list" in ann_str or "sequence" in ann_str:
+                            param_type = "array"
+                        elif "dict" in ann_str or "mapping" in ann_str:
+                            param_type = "object"
 
-        if expected == "boolean":
-            if not isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be a boolean.")
-            return
+                    params["properties"][param_name] = {
+                        "type": param_type,
+                        "description": param_name,
+                    }
 
-        if expected == "object":
-            if not isinstance(value, dict):
-                raise OllamaToolError(f"Argument {name!r} must be an object.")
-            return
+                    # Mark as required if no default value
+                    if param.default == Parameter.empty:
+                        params["required"].append(param_name)
 
-        if expected == "array":
-            if not isinstance(value, list):
-                raise OllamaToolError(f"Argument {name!r} must be an array.")
-            item_schema = schema.get("items")
-            if isinstance(item_schema, dict):
-                for idx, item in enumerate(value):
-                    self._validate_value(f"{name}[{idx}]", item, item_schema)
-            return
+                schemas.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "description": (fn.__doc__ or name).strip(),
+                            "parameters": params,
+                        },
+                    }
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "tools.schema.introspection.failed",
+                    extra={
+                        "event": "tools.schema.introspection.failed",
+                        "tool": name,
+                        "error": str(exc),
+                    },
+                )
 
-    def _validate_schema_arguments(
-        self,
-        schema: dict[str, Any],
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Validate arguments against a constrained JSON schema subset."""
-        if not isinstance(arguments, dict):
-            raise OllamaToolError("Tool arguments must be a JSON object.")
+        # Add ToolSpec schemas (already properly formatted)
+        schemas.extend([spec.as_ollama_tool() for spec in self._specs.values()])
 
-        if schema.get("type") != "object":
-            raise OllamaToolError("Tool schema root must be an object.")
-
-        properties = schema.get("properties", {})
-        if not isinstance(properties, dict):
-            raise OllamaToolError("Tool schema properties must be an object.")
-        required = schema.get("required", [])
-        if not isinstance(required, list):
-            raise OllamaToolError("Tool schema required must be a list.")
-        additional_allowed = bool(schema.get("additionalProperties", False))
-
-        missing = [name for name in required if name not in arguments]
-        if missing:
-            raise OllamaToolError(f"Missing required argument(s): {', '.join(missing)}")
-
-        for arg_name, arg_value in arguments.items():
-            prop_schema = properties.get(arg_name)
-            if prop_schema is None:
-                if additional_allowed:
-                    continue
-                raise OllamaToolError(f"Unknown argument: {arg_name!r}")
-            self._validate_value(arg_name, arg_value, prop_schema)
-
-        return arguments
+        return schemas
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a named tool and return its string result.
+
+        Schema validation is handled by the ToolSpec handler or Tool.run().
+        This method just coordinates execution and applies output truncation.
 
         Raises OllamaToolError if the tool is unknown or raises an exception.
         This method is synchronous; callers in an async context should use
@@ -273,11 +330,8 @@ class ToolRegistry:
         spec = self._specs.get(name)
         if spec is not None:
             try:
-                validated = self._validate_schema_arguments(
-                    spec.parameters_schema,
-                    arguments,
-                )
-                result = str(spec.handler(validated))
+                # ToolSpec handlers do their own validation if needed
+                result = str(spec.handler(arguments))
                 truncated, _ = _truncate_output(
                     result,
                     max_lines=self._runtime_options.max_output_lines,
@@ -292,6 +346,7 @@ class ToolRegistry:
         fn = self._tools.get(name)
         if fn is None:
             raise OllamaToolError(f"Unknown tool requested by model: {name!r}")
+
         try:
             result = str(fn(**arguments))
             truncated, _ = _truncate_output(
