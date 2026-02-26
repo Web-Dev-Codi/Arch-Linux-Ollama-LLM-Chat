@@ -20,21 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from enum import Enum
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from ..chat import OllamaChat
+    from ..state import ConnectionState
 
 LOGGER = logging.getLogger(__name__)
-
-
-class ConnectionState(Enum):
-    """Connection status."""
-
-    UNKNOWN = "unknown"
-    ONLINE = "online"
-    OFFLINE = "offline"
 
 
 class ConnectionManager:
@@ -56,14 +48,17 @@ class ConnectionManager:
             chat_client: Ollama chat client
             check_interval_seconds: How often to check connection
         """
+        from ..state import ConnectionState
+
         self.chat = chat_client
         self.check_interval = check_interval_seconds
         self._state = ConnectionState.UNKNOWN
         self._check_task: asyncio.Task | None = None
         self._on_state_change: list[Callable] = []
+        self._ConnectionState = ConnectionState  # Store class for use in methods
 
     @property
-    def state(self) -> ConnectionState:
+    def state(self):
         """Current connection state."""
         return self._state
 
@@ -92,7 +87,7 @@ class ConnectionManager:
             self._check_task = None
             LOGGER.info("Connection monitoring stopped")
 
-    async def check_connection(self) -> ConnectionState:
+    async def check_connection(self):
         """Check connection and update state.
 
         Returns:
@@ -101,10 +96,12 @@ class ConnectionManager:
         try:
             is_connected = await self.chat.check_connection()
             new_state = (
-                ConnectionState.ONLINE if is_connected else ConnectionState.OFFLINE
+                self._ConnectionState.ONLINE
+                if is_connected
+                else self._ConnectionState.OFFLINE
             )
         except Exception:
-            new_state = ConnectionState.OFFLINE
+            new_state = self._ConnectionState.OFFLINE
 
         if new_state != self._state:
             old_state = self._state
@@ -131,8 +128,8 @@ class ConnectionManager:
 
     async def _notify_change(
         self,
-        old_state: ConnectionState,
-        new_state: ConnectionState,
+        old_state,
+        new_state,
     ) -> None:
         """Notify callbacks of state change."""
         for callback in self._on_state_change:

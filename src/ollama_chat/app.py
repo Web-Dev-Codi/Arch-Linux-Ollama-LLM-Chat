@@ -46,6 +46,7 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
+from .managers.connection import ConnectionManager
 from .tooling import (
     ToolRegistry,
     ToolRegistryOptions,
@@ -472,7 +473,13 @@ class OllamaChatApp(App[None]):
         ).strip()
         self.state = StateManager()
         self._task_manager = TaskManager()
-        self._connection_state = ConnectionState.UNKNOWN
+        self.connection_manager = ConnectionManager(
+            self.chat,
+            check_interval_seconds=int(
+                config["app"]["connection_check_interval_seconds"]
+            ),
+        )
+        self.connection_manager.on_state_change(self._on_connection_state_changed)
         self._search = SearchState()
         self._attachments = AttachmentState()
         self._image_dialog_active = False
@@ -847,7 +854,7 @@ class OllamaChatApp(App[None]):
         self._w_activity.set_shortcut_hints(f"{palette_key} commands")
 
         # The connection monitor starts only after _prepare_startup_model() completes
-        # so that the startup check sets _connection_state first, preventing the
+        # so that the startup check sets the initial connection state first, preventing the
         # monitor from immediately overwriting the startup result with a concurrent
         # check_connection() call.
         self._task_manager.add(
@@ -868,11 +875,8 @@ class OllamaChatApp(App[None]):
                 self._w_file.disabled = False
             self._update_status_bar()
             # Start the connection monitor only after startup determines the initial
-            # connection state, so the two tasks cannot race to write _connection_state.
-            self._task_manager.add(
-                asyncio.create_task(self._connection_monitor_loop()),
-                name="connection_monitor",
-            )
+            # connection state, so the two tasks cannot race.
+            await self.connection_manager.start_monitoring()
 
     async def _ensure_startup_model_ready(self) -> None:
         """Ensure configured model is available before interactive usage."""
@@ -889,22 +893,22 @@ class OllamaChatApp(App[None]):
                 await self.chat.ensure_model_ready_no_pull()  # type: ignore[func-returns-value]
             else:
                 await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
-            self._connection_state = ConnectionState.ONLINE
+            self.connection_manager._state = ConnectionState.ONLINE
             # Detect what this model actually supports and update effective caps.
             self._model_caps = await self.chat.show_model_capabilities()
             self._update_effective_caps()
             self._set_idle_sub_title(f"Model ready: {self.chat.model}")
         except OllamaConnectionError:
-            self._connection_state = ConnectionState.OFFLINE
+            self.connection_manager._state = ConnectionState.OFFLINE
             self.sub_title = "Cannot reach Ollama. Start ollama serve."
         except OllamaModelNotFoundError:
-            self._connection_state = ConnectionState.ONLINE
+            self.connection_manager._state = ConnectionState.ONLINE
             self.sub_title = (
                 f"Model not available: {self.chat.model}. "
                 "Enable pull_model_on_start or run ollama pull manually."
             )
         except OllamaStreamingError:
-            self._connection_state = ConnectionState.OFFLINE
+            self.connection_manager._state = ConnectionState.OFFLINE
             self.sub_title = "Failed while preparing model."
         except OllamaChatError:
             self.sub_title = "Model preparation failed."
@@ -1053,7 +1057,7 @@ class OllamaChatApp(App[None]):
             "#status_bar", StatusBar
         )
         status_widget.set_status(
-            connection_state=self._connection_state.value,
+            connection_state=self.connection_manager.state.value,
             model=self.chat.model,
             message_count=message_count,
             estimated_tokens=self.chat.estimated_context_tokens,
@@ -1096,7 +1100,7 @@ class OllamaChatApp(App[None]):
                 await self.chat.ensure_model_ready_no_pull()  # type: ignore[func-returns-value]
             else:
                 await self.chat.ensure_model_ready(pull_if_missing=False)
-            self._connection_state = ConnectionState.ONLINE
+            self.connection_manager._state = ConnectionState.ONLINE
 
             # Fetch this model's actual capabilities and recompute effective flags.
             self._model_caps = await self.chat.show_model_capabilities(model_name)
@@ -1129,7 +1133,7 @@ class OllamaChatApp(App[None]):
                 },
             )
             if isinstance(exc, OllamaConnectionError):
-                self._connection_state = ConnectionState.OFFLINE
+                self.connection_manager._state = ConnectionState.OFFLINE
                 self.sub_title = "Unable to switch model while offline."
             elif isinstance(exc, OllamaModelNotFoundError):
                 self._set_idle_sub_title(
@@ -1142,33 +1146,18 @@ class OllamaChatApp(App[None]):
         finally:
             self._update_status_bar()
 
-    async def _connection_monitor_loop(self) -> None:
-        interval = int(self.config["app"]["connection_check_interval_seconds"])
-        try:
-            while True:
-                connected = await self.chat.check_connection()
-                new_state = (
-                    ConnectionState.ONLINE if connected else ConnectionState.OFFLINE
-                )
-                if new_state != self._connection_state:
-                    self._connection_state = new_state
-                    LOGGER.info(
-                        "app.connection.state",
-                        extra={
-                            "event": "app.connection.state",
-                            "connection_state": new_state.value,
-                        },
-                    )
-                    if await self.state.get_state() == ConversationState.IDLE:
-                        self._set_idle_sub_title(f"Connection: {new_state}")
-                self._update_status_bar()
-                await asyncio.sleep(interval * random.uniform(0.85, 1.15))
-        except asyncio.CancelledError:
-            LOGGER.info(
-                "app.connection.monitor.stopped",
-                extra={"event": "app.connection.monitor.stopped"},
-            )
-            raise
+    async def _on_connection_state_changed(self, old_state, new_state) -> None:
+        """Handle connection state changes from ConnectionManager."""
+        LOGGER.info(
+            "app.connection.state",
+            extra={
+                "event": "app.connection.state",
+                "connection_state": new_state.value,
+            },
+        )
+        if await self.state.get_state() == ConversationState.IDLE:
+            self._set_idle_sub_title(f"Connection: {new_state}")
+        self._update_status_bar()
 
     async def _add_message(
         self, content: str, role: str, timestamp: str = ""
@@ -1570,6 +1559,7 @@ class OllamaChatApp(App[None]):
         """Cancel and await all background tasks during shutdown."""
         self._auto_save_on_exit()
         await self._transition_state(ConversationState.CANCELLING)
+        await self.connection_manager.stop_monitoring()
         await self._task_manager.cancel_all()
         await self._transition_state(ConversationState.IDLE)
 
