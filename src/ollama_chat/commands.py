@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import re
+from .capabilities import CapabilityContext
 
 _IMAGE_PREFIX_RE = re.compile(r"(?:^|\s)/image\s+(\S+)")
 _FILE_PREFIX_RE = re.compile(r"(?:^|\s)/file\s+(\S+)")
@@ -19,7 +20,7 @@ class ParsedDirectives:
     file_paths: list[str]
 
 
-def parse_inline_directives(text: str, *, vision_enabled: bool) -> ParsedDirectives:
+def parse_inline_directives(text: str, caps: CapabilityContext) -> ParsedDirectives:
     """Parse inline attachment directives from user input.
 
     Returns cleaned text plus any image/file paths.
@@ -28,7 +29,7 @@ def parse_inline_directives(text: str, *, vision_enabled: bool) -> ParsedDirecti
     raw = text
 
     image_paths: list[str] = []
-    if vision_enabled:
+    if caps.vision_enabled:
         matches = _IMAGE_PREFIX_RE.findall(raw)
         for path in matches:
             image_paths.append(os.path.expanduser(path))

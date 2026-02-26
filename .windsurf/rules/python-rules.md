@@ -102,7 +102,7 @@ repos:
 
 ### 3.1 Prefer Language Features Over Formal Patterns
 
-**RULE:** Always use Python's native features before implementing classical patterns.
+**RULE:** Always use Python's native features before implementing classical patterns assigned to you.
 
 | Pattern | Python Approach |
 |---------|----------------|
@@ -211,8 +211,6 @@ service = NotificationService(EmailSender())
 ### 4.1 Core Rules
 
 - **DRY (Don't Repeat Yourself):** Extract duplicated logic, but follow Rule of Three (wait for 3 occurrences)
-- **KISS (Keep It Simple):** When DRY and KISS conflict, KISS wins
-- **YAGNI (You Aren't Gonna Need It):** Don't build for hypothetical future requirements
 - **Composition > Inheritance:** Assemble behavior from components
 - **Early Returns:** Reduce nesting, fail fast
 
@@ -683,6 +681,6 @@ When deviating, document the reason with inline comments or ADRs (Architecture D
 
 ---
 
-**Last Updated:** 2025-02-24
-**Target Python Version:** 3.10+
+**Last Updated:** 2026-02-24
+**Target Python Version:** 3.13+
 **Toolchain:** Ruff 0.8+, mypy 1.13+, pytest 8.0+, uv 0.5+

@@ -1,0 +1,20 @@
+# Pre-commit hooks for linting, formatting, and type-checking
+# - Ruff handles linting and formatting
+# - Mypy performs type checking
+# Excludes prevent scanning generated/build artifacts and virtualenvs
+exclude: |
+  ^(build/|dist/|\.venv/|\.mypy_cache/|\.ruff_cache/|\.pytest_cache/|docs/|build/lib/).*
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.7
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies: []

@@ -24,7 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
-from .chat import CapabilityReport, OllamaChat
+from .chat import CapabilityReport, OllamaChat, ChatSendOptions
 from .commands import parse_inline_directives
 from .config import load_config
 from .exceptions import (
@@ -46,7 +46,7 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
-from .tools import ToolRegistry, build_default_registry
+from .tools import ToolRegistry, build_registry, ToolRegistryOptions
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
 from .widgets.message import MessageBubble
@@ -520,10 +520,16 @@ class OllamaChatApp(App[None]):
         # used is gated at call time by _effective_caps.tools_enabled.  This
         # ensures the registry is ready when the first tool-capable model loads.
         try:
-            self._tool_registry: ToolRegistry | None = build_default_registry(
-                web_search_enabled=self.capabilities.web_search_enabled,
-                web_search_api_key=self.capabilities.web_search_api_key,
+            options = (
+                ToolRegistryOptions(
+                    web_search_api_key=(
+                        self.capabilities.web_search_api_key
+                        if self.capabilities.web_search_enabled
+                        else None
+                    )
+                )
             )
+            self._tool_registry: ToolRegistry | None = build_registry(options)
         except OllamaToolError as exc:
             LOGGER.warning(
                 "app.tools.disabled",
@@ -850,7 +856,16 @@ class OllamaChatApp(App[None]):
         pull_on_start = bool(self.config["ollama"].get("pull_model_on_start", True))
         self.sub_title = f"Preparing model: {self.chat.model}"
         try:
-            await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
+            # Prefer new wrapper methods when available; fall back to legacy flag API
+            # so test fakes that only implement ensure_model_ready(...) still work.
+            if pull_on_start and hasattr(self.chat, "ensure_model_ready_pull"):
+                await self.chat.ensure_model_ready_pull()  # type: ignore[func-returns-value]
+            elif (not pull_on_start) and hasattr(
+                self.chat, "ensure_model_ready_no_pull"
+            ):
+                await self.chat.ensure_model_ready_no_pull()  # type: ignore[func-returns-value]
+            else:
+                await self.chat.ensure_model_ready(pull_if_missing=pull_on_start)
             self._connection_state = ConnectionState.ONLINE
             # Detect what this model actually supports and update effective caps.
             self._model_caps = await self.chat.show_model_capabilities()
@@ -1054,7 +1069,10 @@ class OllamaChatApp(App[None]):
         self.chat.set_model(model_name)
         self.sub_title = f"Switching model: {model_name}"
         try:
-            await self.chat.ensure_model_ready(pull_if_missing=False)
+            if hasattr(self.chat, "ensure_model_ready_no_pull"):
+                await self.chat.ensure_model_ready_no_pull()  # type: ignore[func-returns-value]
+            else:
+                await self.chat.ensure_model_ready(pull_if_missing=False)
             self._connection_state = ConnectionState.ONLINE
 
             # Fetch this model's actual capabilities and recompute effective flags.
@@ -1395,18 +1413,15 @@ class OllamaChatApp(App[None]):
         )
 
         try:
-            async for chunk in self.chat.send_message(
-                user_text,
+            opts = ChatSendOptions(
                 images=images or None,
-                # Pass tool_registry only when the *effective* caps say tools are on.
-                # _effective_caps already intersects config + what Ollama reports for
-                # this model, so models that don't support tools get tool_registry=None.
                 tool_registry=(
                     self._tool_registry if self._effective_caps.tools_enabled else None
                 ),
                 think=self._effective_caps.think,
                 max_tool_iterations=self._effective_caps.max_tool_iterations,
-            ):
+            )
+            async for chunk in self.chat.send(user_text, options=opts):
                 if chunk.kind == "thinking":
                     await handler.handle_thinking(
                         chunk.text, self._stop_response_indicator_task
@@ -1680,9 +1695,7 @@ class OllamaChatApp(App[None]):
             if await self._dispatch_slash_command(raw_text):
                 return
 
-        directives = parse_inline_directives(
-            raw_text, vision_enabled=self._effective_caps.vision_enabled
-        )
+        directives = parse_inline_directives(raw_text, self._effective_caps)
         user_text = directives.cleaned_text
         inline_images = directives.image_paths
         inline_files = directives.file_paths

@@ -67,6 +67,27 @@ class CapabilityReport:
     known: bool
 
 
+@dataclass(frozen=True)
+class ChatSendOptions:
+    """Typed options for sending a chat message (≤2 param API).
+
+    Group related optional arguments to avoid boolean flag params and
+    long parameter lists in public APIs.
+    """
+
+    images: list[str | bytes] | None = None
+    tool_registry: Any | None = None
+    think: bool = False
+    max_tool_iterations: int = 10
+
+
+@dataclass(frozen=True)
+class ModelReadyOptions:
+    """Options for ensuring a model is ready."""
+
+    pull_if_missing: bool = True
+
+
 class OllamaChat:
     """Stateful chat wrapper that keeps bounded message history and streams replies."""
 
@@ -148,6 +169,22 @@ class OllamaChat:
         if normalized:
             self.model = normalized
 
+    async def send(self, user_message: str, options: ChatSendOptions | None = None) -> AsyncGenerator[ChatChunk, None]:
+        """Two-parameter alternative to ``send_message`` using typed options.
+
+        Implemented as an async generator that yields from ``send_message`` so
+        callers can iterate with ``async for`` directly.
+        """
+        opts = options or ChatSendOptions()
+        async for chunk in self.send_message(
+            user_message,
+            images=opts.images,
+            tool_registry=opts.tool_registry,
+            think=opts.think,
+            max_tool_iterations=opts.max_tool_iterations,
+        ):
+            yield chunk
+
     @staticmethod
     def _model_name_matches(requested_model: str, available_model: str) -> bool:
         requested = requested_model.strip().lower()
@@ -228,6 +265,18 @@ class OllamaChat:
             extra={"event": "chat.model.pull.complete", "model": self.model},
         )
         return True
+
+    async def ensure_model_ready_with(self, options: ModelReadyOptions) -> bool:
+        """Two-parameter variant that accepts typed options instead of a flag."""
+        return await self.ensure_model_ready(pull_if_missing=options.pull_if_missing)
+
+    async def ensure_model_ready_pull(self) -> bool:
+        """Ensure model is ready, pulling if missing."""
+        return await self.ensure_model_ready(True)
+
+    async def ensure_model_ready_no_pull(self) -> bool:
+        """Ensure model is ready without pulling when missing."""
+        return await self.ensure_model_ready(False)
 
     async def check_connection(self) -> bool:
         """Return whether the Ollama host is reachable."""

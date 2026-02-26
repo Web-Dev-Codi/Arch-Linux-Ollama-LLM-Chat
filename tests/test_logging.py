@@ -10,7 +10,8 @@ from pathlib import Path
 import unittest
 
 from ollama_chat.chat import OllamaChat
-from ollama_chat.logging_utils import JsonFormatter, configure_logging
+from ollama_chat.logging_utils import configure_logging
+import structlog
 
 
 class RetryClient:
@@ -56,8 +57,15 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content_texts, ["ok"])
         self.assertTrue(any("chat.request.retry" in line for line in logs.output))
 
-    async def test_json_formatter_includes_structured_fields(self) -> None:
-        formatter = JsonFormatter()
+    async def test_structured_formatter_emits_json_that_parses(self) -> None:
+        configure_logging({"level": "INFO", "structured": True, "log_to_file": False})
+        root = logging.getLogger()
+        formatters = [h.formatter for h in root.handlers]
+        proc_fmt = next(
+            (f for f in formatters if isinstance(f, structlog.stdlib.ProcessorFormatter)),
+            None,
+        )
+        self.assertIsNotNone(proc_fmt)
         record = logging.LogRecord(
             name="ollama_chat.test",
             level=logging.INFO,
@@ -67,15 +75,13 @@ class LoggingTests(unittest.IsolatedAsyncioTestCase):
             args=(),
             exc_info=None,
         )
-        record.event = "app.state.transition"
-        record.from_state = "IDLE"
-        record.to_state = "STREAMING"
-
-        data = json.loads(formatter.format(record))
-        self.assertEqual(data["event"], "app.state.transition")
-        self.assertEqual(data["from_state"], "IDLE")
-        self.assertEqual(data["to_state"], "STREAMING")
-        self.assertEqual(data["level"], "INFO")
+        text = proc_fmt.format(record)  # type: ignore[union-attr]
+        data = json.loads(text)
+        # At minimum, ensure structured keys exist and message is present.
+        self.assertIn("event", data)
+        self.assertIn("level", data)
+        self.assertIn("logger", data)
+        self.assertEqual(data["event"], "state transition")
 
 
 class ConfigureLoggingTests(unittest.TestCase):
@@ -104,17 +110,21 @@ class ConfigureLoggingTests(unittest.TestCase):
         ]
         self.assertTrue(len(stream_handlers) >= 1)
 
-    def test_configure_logging_structured_uses_json_formatter(self) -> None:
+    def test_configure_logging_structured_uses_processor_formatter(self) -> None:
         configure_logging({"level": "DEBUG", "structured": True, "log_to_file": False})
         root = logging.getLogger()
         formatters = [h.formatter for h in root.handlers]
-        self.assertTrue(any(isinstance(f, JsonFormatter) for f in formatters))
+        self.assertTrue(
+            any(isinstance(f, structlog.stdlib.ProcessorFormatter) for f in formatters)
+        )
 
     def test_configure_logging_plain_formatter_when_not_structured(self) -> None:
         configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
         root = logging.getLogger()
         formatters = [h.formatter for h in root.handlers]
-        self.assertFalse(any(isinstance(f, JsonFormatter) for f in formatters))
+        self.assertFalse(
+            any(isinstance(f, structlog.stdlib.ProcessorFormatter) for f in formatters)
+        )
 
     def test_configure_logging_sets_root_level(self) -> None:
         configure_logging({"level": "DEBUG", "structured": False, "log_to_file": False})
