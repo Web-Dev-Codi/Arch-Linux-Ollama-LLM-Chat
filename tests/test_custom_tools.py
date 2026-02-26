@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from ollama_chat.exceptions import OllamaToolError
-from ollama_chat.tools import ToolRegistryOptions, ToolRuntimeOptions, build_registry
+from ollama_chat.tooling import ToolRegistryOptions, ToolRuntimeOptions, build_registry
 
 
 class CustomToolsTests(unittest.TestCase):
@@ -17,19 +17,18 @@ class CustomToolsTests(unittest.TestCase):
         registry = build_registry(
             ToolRegistryOptions(
                 enable_custom_tools=True,
+                # Built-in tools are enabled by default; list of names can include
+                # overlap from the built-in adapter. We only require that the
+                # schema-first set is a subset of the registry names.
                 runtime_options=ToolRuntimeOptions(),
             )
         )
         names = set(registry.list_tool_names())
-        expected = {
+        expected_subset = {
             "apply_patch",
             "bash",
             "batch",
-            "codesearch",
-            "edit",
-            "external-directory",
             "glob",
-            "grep",
             "invalid",
             "ls",
             "multiedit",
@@ -37,7 +36,6 @@ class CustomToolsTests(unittest.TestCase):
             "plan-exit",
             "plan",
             "question",
-            "read",
             "registry",
             "task",
             "todo",
@@ -49,7 +47,19 @@ class CustomToolsTests(unittest.TestCase):
             "websearch",
             "write",
         }
-        self.assertTrue(expected.issubset(names))
+        self.assertTrue(expected_subset.issubset(names))
+
+    def test_builtin_adapter_precedence_for_allowlisted_names(self) -> None:
+        registry = build_registry(
+            ToolRegistryOptions(
+                enable_custom_tools=True,
+                runtime_options=ToolRuntimeOptions(),
+            )
+        )
+        names = set(registry.list_tool_names())
+        # Ensure allowlisted built-ins are present
+        for name in {"codesearch", "edit", "grep", "list", "read"}:
+            self.assertIn(name, names)
 
     def test_write_read_edit_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

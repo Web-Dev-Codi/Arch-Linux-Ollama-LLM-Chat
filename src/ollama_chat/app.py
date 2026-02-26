@@ -46,7 +46,7 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
-from .tools import ToolRegistry, ToolRegistryOptions, ToolRuntimeOptions, build_registry
+from .tooling import ToolRegistry, ToolRegistryOptions, ToolRuntimeOptions, build_registry
 from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox

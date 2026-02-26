@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from ollama_chat.exceptions import OllamaToolError
-from ollama_chat.tools import (
+from ollama_chat.tooling import (
     ToolRegistry,
     ToolRegistryOptions,
     ToolRuntimeOptions,
@@ -122,6 +122,36 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertTrue(
             any(item["function"]["name"] == "bash" for item in schema_tools)
         )
+
+    def test_builtin_adapter_allowlist_and_execution(self) -> None:
+        # Built-in adapter is enabled by default; custom tools disabled.
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = build_registry(
+                ToolRegistryOptions(
+                    enable_custom_tools=False,
+                    runtime_options=ToolRuntimeOptions(workspace_root=str(root)),
+                )
+            )
+            names = set(registry.list_tool_names())
+            # Exactly the allowlist should be present from built-ins
+            for name in {"codesearch", "edit", "grep", "list", "read"}:
+                self.assertIn(name, names)
+            # Sanity: non-allowlisted names from custom suite should not be present
+            self.assertNotIn("write", names)
+
+            # Verify read executes by creating a file and reading it
+            target = root / "foo.txt"
+            target.write_text("hello\nworld\n", encoding="utf-8")
+            read_out = registry.execute("read", {"file_path": str(target), "limit": 1})
+            self.assertIn("hello", read_out)
+
+            # grep may use ripgrep if available; still should not crash on a simple pattern
+            grep_out = registry.execute("grep", {"pattern": "hello", "path": str(root)})
+            self.assertIn("Found", grep_out)
 
     def test_schema_tool_validation_rejects_missing_required_argument(self) -> None:
         registry = build_registry(ToolRegistryOptions(enable_custom_tools=True))

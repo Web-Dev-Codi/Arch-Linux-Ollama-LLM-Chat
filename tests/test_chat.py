@@ -7,7 +7,7 @@ import unittest
 
 from ollama_chat.chat import ChatChunk, OllamaChat
 from ollama_chat.exceptions import OllamaModelNotFoundError, OllamaStreamingError
-from ollama_chat.tools import ToolRegistry
+from ollama_chat.tooling import ToolRegistry
 
 
 async def _chunk_stream(

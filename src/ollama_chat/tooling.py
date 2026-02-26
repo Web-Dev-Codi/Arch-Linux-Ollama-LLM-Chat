@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import asyncio
 from dataclasses import dataclass, field
 import logging
 import os
+import sys
 import threading
+import time
 from typing import Any
 
 from .custom_tools import CustomToolSuite, ToolRuntimeOptions, ToolSpec
 from .exceptions import OllamaToolError
+from .tools.base import ToolContext
 
 try:
     from ollama import web_fetch as _ollama_web_fetch
@@ -65,6 +69,87 @@ def _truncate_output(text: str, max_lines: int, max_bytes: int) -> tuple[str, bo
             result = "\n".join(lines[:max_lines] + ["... [truncated by line limit]"])
 
     return result, truncated
+
+
+class ToolsPackageAdapter:
+    def __init__(
+        self,
+        runtime_options: ToolRuntimeOptions,
+        ask_cb: Callable[..., Any] | None = None,
+        metadata_cb: Callable[[dict], None] | None = None,
+    ) -> None:
+        self._runtime = runtime_options
+        self._ask_cb = ask_cb
+        self._metadata_cb = metadata_cb
+
+    def to_specs(self) -> list[ToolSpec]:
+        allow = {"codesearch", "edit", "grep", "list", "read"}
+        specs: list[ToolSpec] = []
+        # Ensure modules that import `from support import ...` can resolve the local
+        # package alias (ollama_chat.support) without modifying their import lines.
+        try:
+            import ollama_chat.support as _support_pkg  # type: ignore[import-not-found]
+            sys.modules.setdefault("support", _support_pkg)
+        except Exception:
+            pass
+        try:
+            from .tools.registry import get_registry  # local/lazy import
+            tools = get_registry().tools_for_model()
+        except Exception:
+            tools = []
+        for tool in tools:
+            name = getattr(tool, "id", "")
+            if not name or name not in allow:
+                continue
+            try:
+                schema = tool.params_schema.model_json_schema()
+            except Exception:
+                schema = {"type": "object", "properties": {}, "required": []}
+            if schema.get("type") != "object":
+                schema = {
+                    "type": "object",
+                    "properties": schema.get("properties", {}),
+                    "required": schema.get("required", []),
+                    "additionalProperties": True,
+                }
+            else:
+                schema.setdefault("additionalProperties", True)
+
+            def make_handler(t=tool) -> Callable[[dict[str, Any]], str]:
+                def handler(args: dict[str, Any]) -> str:
+                    async def _run() -> str:
+                        ctx = ToolContext(
+                            session_id="default",
+                            message_id=str(time.time_ns()),
+                            agent="ollama",
+                            abort=asyncio.Event(),
+                            extra={
+                                "project_dir": self._runtime.workspace_root,
+                                "bypassCwdCheck": self._runtime.allow_external_directories,
+                            },
+                        )
+                        if self._metadata_cb is not None:
+                            ctx._metadata_cb = self._metadata_cb  # type: ignore[attr-defined]
+                        if self._ask_cb is not None:
+                            ctx._ask_cb = self._ask_cb  # type: ignore[attr-defined]
+                        result = await t.run(args, ctx)
+                        return str(result.output)
+
+                    return asyncio.run(_run())
+
+                return handler
+
+            specs.append(
+                ToolSpec(
+                    name=name,
+                    description=getattr(tool, "description", name),
+                    parameters_schema=schema,
+                    handler=make_handler(),
+                    safety_level="safe",
+                    category="builtin",
+                )
+            )
+        return specs
 
 
 class ToolRegistry:
@@ -238,6 +323,7 @@ class ToolRegistryOptions:
 
     web_search_api_key: str | None = None
     enable_custom_tools: bool = False
+    enable_builtin_tools: bool = True
     runtime_options: ToolRuntimeOptions = field(default_factory=ToolRuntimeOptions)
 
 
@@ -269,6 +355,16 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
             extra={"event": "tools.web_search.enabled"},
         )
 
+    # Register built-in class-based tools first so that custom tools may override
+    # duplicate names when both systems are enabled.
+    builtin_names: set[str] = set()
+    if options.enable_builtin_tools:
+        adapter = ToolsPackageAdapter(options.runtime_options)
+        builtin_specs = adapter.to_specs()
+        for spec in builtin_specs:
+            registry.register_spec(spec)
+            builtin_names.add(spec.name)
+
     if options.enable_custom_tools:
         suite = CustomToolSuite(
             runtime_options=options.runtime_options,
@@ -277,6 +373,10 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
         )
         suite.bind_executor(registry.execute)
         for spec in suite.specs():
+            # Prefer built-in implementations for overlapping names in the initial
+            # allowlist (read, edit, grep, codesearch, list). Skip duplicates.
+            if spec.name in builtin_names:
+                continue
             registry.register_spec(spec)
     return registry
 
