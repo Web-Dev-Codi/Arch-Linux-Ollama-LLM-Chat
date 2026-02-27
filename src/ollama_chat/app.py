@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 from typing import Any
-from urllib.parse import urlparse
+import urllib.parse
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -126,8 +126,6 @@ async def _open_native_file_dialog(
             if proc.returncode == 0:
                 output = stdout.decode().strip()
                 if "file://" in output:
-                    import urllib.parse
-
                     for token in output.split():
                         cleaned = token.strip("',()><[]")
                         if cleaned.startswith("file://"):
@@ -430,31 +428,6 @@ class OllamaChatApp(App[None]):
             },
         )
 
-        # Enforce host policy defensively (config already validates, but keep
-        # the boundary explicit here).
-        security_cfg = self.config.get("security", {})
-        host_value = str(self.config["ollama"]["host"])
-        parsed = urlparse(host_value)
-        hostname = (parsed.hostname or "").strip().lower()
-        scheme = parsed.scheme.lower()
-        allowed_hosts = {
-            str(item).strip().lower()
-            for item in security_cfg.get("allowed_hosts", [])
-            if str(item).strip()
-        }
-        if scheme not in {"http", "https"} or not hostname:
-            raise OllamaConnectionError(
-                "ollama.host must use http(s) and include a hostname."
-            )
-        if (
-            not bool(security_cfg.get("allow_remote_hosts", False))
-            and hostname not in allowed_hosts
-        ):
-            raise OllamaConnectionError(
-                "ollama.host is not allowed by security policy. "
-                "Set security.allow_remote_hosts=true or add the hostname to security.allowed_hosts."
-            )
-
         ollama_cfg = self.config["ollama"]
         configured_default_model = str(ollama_cfg["model"])
         self._configured_models = self._normalize_configured_models(
@@ -685,6 +658,7 @@ class OllamaChatApp(App[None]):
         self.sub_title = f"Attached file: {raw_path}"
 
     def _load_last_prompt(self) -> None:
+        """Load last prompt synchronously during init (file is small)."""
         try:
             if self._last_prompt_path.exists():
                 self._last_prompt = self._last_prompt_path.read_text(

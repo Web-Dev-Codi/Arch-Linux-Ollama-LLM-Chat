@@ -778,8 +778,9 @@ class OllamaChat:
             request_messages[-1]["images"] = list(images)
 
         # Accumulated assistant message parts (for history persistence).
-        accumulated_thinking = ""
-        accumulated_content = ""
+        # Use lists for efficient string building instead of += concatenation
+        accumulated_thinking_parts: list[str] = []
+        accumulated_content_parts: list[str] = []
         accumulated_tool_calls: list[dict[str, Any]] = []
 
         # Track the most-recent iteration's content so that if max_tool_iterations
@@ -795,10 +796,10 @@ class OllamaChat:
                             request_messages, tool_registry, think
                         ):
                             if chunk.kind == "thinking":
-                                accumulated_thinking += chunk.text
+                                accumulated_thinking_parts.append(chunk.text)
                                 yield chunk
                             elif chunk.kind == "content":
-                                accumulated_content += chunk.text
+                                accumulated_content_parts.append(chunk.text)
                                 yield chunk
                             elif chunk.kind == "tool_call":
                                 accumulated_tool_calls.append(
@@ -851,6 +852,10 @@ class OllamaChat:
                     # sequential position so the field is always present.
                     fn_entry["index"] = tc["index"] if tc["index"] is not None else seq
                     tool_call_entries.append({"type": "function", "function": fn_entry})
+
+                # Join accumulated parts for API message
+                accumulated_content = "".join(accumulated_content_parts)
+                accumulated_thinking = "".join(accumulated_thinking_parts)
 
                 assistant_turn: dict[str, Any] = {
                     "role": "assistant",
@@ -913,8 +918,8 @@ class OllamaChat:
                 _last_iteration_content = accumulated_content
 
                 # Reset accumulators for the next agent-loop iteration.
-                accumulated_thinking = ""
-                accumulated_content = ""
+                accumulated_thinking_parts.clear()
+                accumulated_content_parts.clear()
                 accumulated_tool_calls = []
 
         except BaseException:
@@ -928,5 +933,6 @@ class OllamaChat:
         # Persist the final assistant response (text only) to history.
         # If the loop was exhausted (all iterations had tool calls), fall back to
         # the last content that was streamed to the UI but then reset.
-        final_response = (accumulated_content or _last_iteration_content).strip()
+        final_content = "".join(accumulated_content_parts)
+        final_response = (final_content or _last_iteration_content).strip()
         self.message_store.append("assistant", final_response)
