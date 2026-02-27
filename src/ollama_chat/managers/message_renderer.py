@@ -6,15 +6,15 @@ Handles message bubble creation, styling, and conversation history rendering.
 
 from __future__ import annotations
 
-import inspect
 from datetime import datetime
+import inspect
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ollama_chat.managers.capability import CapabilityManager
+    from ollama_chat.managers.theme import ThemeManager
     from ollama_chat.widgets.conversation import ConversationView
     from ollama_chat.widgets.message import MessageBubble
-    from ollama_chat.managers.theme import ThemeManager
-    from ollama_chat.managers.capability import CapabilityManager
 
 
 class MessageRenderer:

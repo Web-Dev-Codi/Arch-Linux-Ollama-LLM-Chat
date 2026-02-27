@@ -4,11 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..support import lsp_client
-
 from .abstracts import FileOperationTool
 from .base import ParamsSchema, ToolContext, ToolResult
-from .utils import generate_unified_diff, notify_file_change, check_file_safety
+from .utils import check_file_safety, generate_unified_diff, notify_file_change
 
 
 class ApplyPatchParams(ParamsSchema):

@@ -6,7 +6,6 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ..support import bus
-
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
 
 try:  # Optional dependency

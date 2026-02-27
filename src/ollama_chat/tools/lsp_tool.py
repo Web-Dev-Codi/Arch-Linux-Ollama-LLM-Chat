@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..support import lsp_client
-
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
 from .utils import check_file_safety
 

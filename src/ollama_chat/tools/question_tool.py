@@ -3,7 +3,6 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..support import question_service
-
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
 
 

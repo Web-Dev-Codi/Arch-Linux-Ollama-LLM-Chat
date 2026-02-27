@@ -24,9 +24,9 @@ Usage:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import logging
 from pathlib import Path
 from typing import Any
-import logging
 
 LOGGER = logging.getLogger(__name__)
 

@@ -19,12 +19,12 @@ This is a Phase 2 foundation - full extraction would continue with:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..chat import OllamaChat
-    from ..state import ConnectionState
 
 LOGGER = logging.getLogger(__name__)
 

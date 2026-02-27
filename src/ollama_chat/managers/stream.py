@@ -7,13 +7,14 @@ Handles streaming responses, placeholder animation, error handling, and interrup
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ollama_chat.chat import OllamaChat, ChatSendOptions
-    from ollama_chat.widgets.message import MessageBubble
+    from ollama_chat.chat import ChatSendOptions, OllamaChat
+    from ollama_chat.state import StateManager
     from ollama_chat.task_manager import TaskManager
-    from ollama_chat.state import StateManager, ConversationState
+    from ollama_chat.widgets.message import MessageBubble
 
 
 class StreamManager:

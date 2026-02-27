@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import asyncio
+from collections.abc import Callable
 import concurrent.futures
 from dataclasses import dataclass, field
-from inspect import Parameter, signature
 import logging
 import os
 import sys

@@ -5,8 +5,8 @@ from collections.abc import Callable
 from datetime import datetime
 import os
 from pathlib import Path
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 
 _state: dict[str, dict[str, datetime]] = {}
 _locks: dict[str, asyncio.Lock] = {}

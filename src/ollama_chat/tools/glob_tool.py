@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 from ..support import ripgrep
-
 from .abstracts import SearchTool
 from .base import ParamsSchema, ToolContext
 

@@ -19,9 +19,10 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
 import logging
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 

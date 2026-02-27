@@ -6,9 +6,10 @@ Manages file/image attachment dialogs, validation, and state management.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ollama_chat.capabilities import AttachmentState

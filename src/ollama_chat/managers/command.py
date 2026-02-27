@@ -12,11 +12,12 @@ Integration required in app.py:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 import logging
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from textual.widgets import OptionList, Input
+    from textual.widgets import OptionList
 
 LOGGER = logging.getLogger(__name__)
 

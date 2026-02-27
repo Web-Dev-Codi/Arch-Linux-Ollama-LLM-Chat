@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 import tempfile
 import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+from pydantic import Field
 import pytest
 
 from src.ollama_chat.capability_cache import (
     CapabilityPersistence,
     ModelCapabilityCache,
 )
-from src.ollama_chat.chat import CapabilityReport, OllamaChat
+from src.ollama_chat.chat import OllamaChat
+from src.ollama_chat.tooling import ToolRegistry
 from src.ollama_chat.tools.base import ParamsSchema, Tool, ToolContext, ToolResult
 from src.ollama_chat.tools.registry import get_registry
-from src.ollama_chat.tooling import ToolRegistry
-from pydantic import Field
 
 
 # Test Tools

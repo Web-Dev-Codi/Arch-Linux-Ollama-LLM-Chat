@@ -16,14 +16,14 @@ Available managers:
 
 from __future__ import annotations
 
+from .attachment import IMAGE_EXTENSIONS, AttachmentManager
 from .capability import CapabilityManager
 from .command import CommandManager
 from .connection import ConnectionManager
 from .conversation import ConversationManager
-from .theme import ThemeManager
-from .stream import StreamManager
 from .message_renderer import MessageRenderer
-from .attachment import AttachmentManager, IMAGE_EXTENSIONS
+from .stream import StreamManager
+from .theme import ThemeManager
 
 __all__ = [
     "CapabilityManager",

@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 import inspect
 import logging
 import os
 from pathlib import Path
-import random
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -25,9 +24,10 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Static
 
 from .capabilities import AttachmentState, CapabilityContext, SearchState
-from .chat import CapabilityReport, ChatSendOptions, OllamaChat
+from .chat import ChatSendOptions, OllamaChat
 from .commands import parse_inline_directives
 from .config import load_config
+from .events.bus import event_bus as app_event_bus
 from .exceptions import (
     OllamaChatError,
     OllamaConnectionError,
@@ -36,17 +36,6 @@ from .exceptions import (
     OllamaToolError,
 )
 from .logging_utils import configure_logging
-from .persistence import ConversationPersistence
-from .screens import (
-    ConversationPickerScreen,
-    ImageAttachScreen,
-    InfoScreen,
-    SimplePickerScreen,
-    TextPromptScreen,
-)
-from .state import ConnectionState, ConversationState, StateManager
-from .stream_handler import StreamHandler
-from .task_manager import TaskManager
 from .managers import (
     AttachmentManager,
     CapabilityManager,
@@ -56,19 +45,27 @@ from .managers import (
     MessageRenderer,
     StreamManager,
     ThemeManager,
-    IMAGE_EXTENSIONS as _IMAGE_EXTENSIONS,
 )
+from .persistence import ConversationPersistence
+from .plugins.interface import PluginManager
+from .screens import (
+    ConversationPickerScreen,
+    ImageAttachScreen,
+    InfoScreen,
+    SimplePickerScreen,
+    TextPromptScreen,
+)
+from .state import ConnectionState, ConversationState, StateManager
+from .task_manager import TaskManager
 from .tooling import (
     ToolRegistry,
-    ToolSpec,
     ToolRegistryOptions,
     ToolRuntimeOptions,
-    build_registry,
+    ToolSpec,
     _run_async_from_sync,
+    build_registry,
 )
 from .tools.base import ToolContext
-from .plugins.interface import PluginManager
-from .events.bus import event_bus as app_event_bus
 from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
@@ -1531,6 +1528,7 @@ class OllamaChatApp(App[None]):
         interrupted = await self.stream_manager.interrupt_stream(self.chat.model)
         if interrupted:
             self._update_status_bar()
+            await self._transition_state(ConversationState.IDLE)
         else:
             self.sub_title = "No response to interrupt."
 
@@ -1903,9 +1901,9 @@ class OllamaChatApp(App[None]):
                 pass
             input_widget.disabled = False
             send_button.disabled = False
+            file_button.disabled = False
             input_widget.focus()
-            if await self.state.get_state() != ConversationState.CANCELLING:
-                await self._transition_state(ConversationState.IDLE)
+            await self._transition_state(ConversationState.IDLE)
             self._update_status_bar()
 
     # _build_slash_registry() deleted - using CommandManager instead

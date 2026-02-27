@@ -7,7 +7,6 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class CapabilityPersistence:
             return
 
         try:
-            with open(self._cache_file, "r", encoding="utf-8") as f:
+            with open(self._cache_file, encoding="utf-8") as f:
                 data = json.load(f)
 
             for model_name, entry in data.items():
