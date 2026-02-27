@@ -103,26 +103,26 @@ class CapabilityManager:
         if not self._model_caps.known:
             LOGGER.warning("Model capabilities unknown, using conservative defaults")
             self._effective_caps = CapabilityContext(
-                think=False,
-                show_thinking=False,
-                tools_enabled=False,
-                vision_enabled=False,
+                think=True,
+                show_thinking=self.user_preferences.get("show_thinking", True),
+                tools_enabled=True,
+                vision_enabled=True,
                 web_search_enabled=self.user_preferences.get(
                     "web_search_enabled", False
                 ),
-                max_tool_iterations=0,
+                max_tool_iterations=self.user_preferences.get("max_tool_iterations", 10),
             )
             return
 
         # Compute effective capabilities
-        caps = self._model_caps.caps
+        caps_set = self._model_caps.caps
 
         # Model support + user preference
         self._effective_caps = CapabilityContext(
-            think=caps.get("tools", False),  # Thinking requires tool support
-            show_thinking=self.user_preferences.get("show_thinking", False),
-            tools_enabled=caps.get("tools", False),
-            vision_enabled=caps.get("vision", False),
+            think=("thinking" in caps_set),
+            show_thinking=self.user_preferences.get("show_thinking", True),
+            tools_enabled=("tools" in caps_set),
+            vision_enabled=("vision" in caps_set),
             web_search_enabled=self.user_preferences.get("web_search_enabled", False),
             max_tool_iterations=self.user_preferences.get("max_tool_iterations", 10),
         )
