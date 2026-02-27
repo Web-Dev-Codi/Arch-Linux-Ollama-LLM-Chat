@@ -16,6 +16,8 @@ dependencies = [
     "pydantic>=2.12.5",
     "rich>=14.3.2",
     "structlog>=25.5.0",
+    "platformdirs>=4.9.2",
+    "tomli-w>=1.2.0",
 ]
 
 [project.optional-dependencies]

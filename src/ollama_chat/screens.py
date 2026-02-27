@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, OptionList, Static
 
@@ -289,6 +289,142 @@ class ConversationPickerScreen(ModalScreen[str | None]):
             selected = -1
         if 0 <= selected < len(self._items):
             self.dismiss(self._items[selected].path)
+
+    def on_key(self, event: Any) -> None:  # noqa: ANN401
+        if str(getattr(event, "key", "")).lower() == "escape":
+            self.dismiss(None)
+
+
+class ThemePickerScreen(ModalScreen[str | None]):
+    """Modal picker for selecting from available themes."""
+
+    CSS = """
+    ThemePickerScreen {
+        align: center middle;
+    }
+
+    #theme-picker-dialog {
+        width: 70;
+        max-height: 28;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+
+    #theme-picker-title {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    #theme-preview {
+        height: 6;
+        margin: 1 0;
+        padding: 1;
+        border: solid $panel;
+        background: $background;
+    }
+
+    .color-swatch {
+        display: inline-block;
+        width: 4;
+        height: 1;
+        margin: 0 1;
+        border: round $text;
+    }
+
+    #theme-help {
+        padding-top: 1;
+    }
+    """
+
+    def __init__(self, themes: dict[str, Any], current_theme: str) -> None:
+        super().__init__()
+        self._themes = themes
+        self._current_theme = current_theme
+        self._theme_names = sorted(
+            [name for name in themes.keys() if not name.endswith("-ansi")]
+        )
+
+    def compose(self) -> ComposeResult:
+        with Container(id="theme-picker-dialog"):
+            yield Static("Select a theme", id="theme-picker-title")
+            yield OptionList(*self._theme_names, id="theme-options")
+            
+            # Theme preview area
+            with Vertical(id="theme-preview"):
+                yield Static("Theme preview will appear here", id="preview-text")
+                with Horizontal(id="color-swatches"):
+                    yield Static("Primary", classes="color-swatch")
+                    yield Static("Secondary", classes="color-swatch") 
+                    yield Static("Accent", classes="color-swatch")
+                    yield Static("Success", classes="color-swatch")
+                    yield Static("Warning", classes="color-swatch")
+                    yield Static("Error", classes="color-swatch")
+            
+            yield Static("Enter/click to select | Esc to cancel", id="theme-help")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#theme-options", OptionList)
+        # Highlight current theme
+        try:
+            current_index = self._theme_names.index(self._current_theme)
+            options.highlighted = current_index
+        except ValueError:
+            pass  # Current theme not in list
+        self._update_preview()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        option_index = getattr(event, "option_index", None)
+        if option_index is None:
+            option_index = getattr(event, "index", -1)
+        try:
+            selected_index = int(option_index or -1)
+        except (TypeError, ValueError):
+            selected_index = -1
+        if 0 <= selected_index < len(self._theme_names):
+            self.dismiss(self._theme_names[selected_index])
+
+    def on_option_list_highlighted_changed(self, event: OptionList.HighlightedChanged) -> None:
+        self._update_preview()
+
+    def _update_preview(self) -> None:
+        """Update the theme preview with colors from the highlighted theme."""
+        options = self.query_one("#theme-options", OptionList)
+        preview_text = self.query_one("#preview-text", Static)
+        
+        try:
+            highlighted_index = options.highlighted
+            if highlighted_index is None or highlighted_index >= len(self._theme_names):
+                return
+                
+            theme_name = self._theme_names[highlighted_index]
+            theme = self._themes[theme_name]
+            
+            # Update preview text
+            is_dark = "Dark" if getattr(theme, "dark", True) else "Light"
+            preview_text.update(f"Theme: {theme_name} ({is_dark})")
+            
+            # Update color swatches
+            swatches = self.query_one("#color-swatches", Horizontal)
+            swatches.remove_children()
+            
+            colors = [
+                ("Primary", getattr(theme, "primary", "#000000")),
+                ("Secondary", getattr(theme, "secondary", "#000000")),
+                ("Accent", getattr(theme, "accent", "#000000")),
+                ("Success", getattr(theme, "success", "#000000")),
+                ("Warning", getattr(theme, "warning", "#000000")),
+                ("Error", getattr(theme, "error", "#000000")),
+            ]
+            
+            for label, color in colors:
+                swatch = Static(label, classes="color-swatch")
+                swatch.styles.background = color
+                swatch.styles.color = "#ffffff"  # White text for contrast
+                swatches.mount(swatch)
+                
+        except Exception:
+            preview_text.update("Preview unavailable")
 
     def on_key(self, event: Any) -> None:  # noqa: ANN401
         if str(getattr(event, "key", "")).lower() == "escape":

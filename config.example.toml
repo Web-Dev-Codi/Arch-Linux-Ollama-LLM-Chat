@@ -22,6 +22,29 @@ border_color = "#565f89"
 show_timestamps = true
 stream_chunk_size = 8
 
+[theme]
+# Theme selection: "textual-dark", "textual-light", "nord", "gruvbox", "tokyo-night", 
+# "monokai", "dracula", "solarized-light", "solarized-dark", "atom-one-dark", "atom-one-light"
+# or "custom" to use the ui colors above
+name = "textual-dark"
+# Persist theme choice across sessions
+persist = true
+# Custom theme definitions (optional)
+[theme.custom]
+# Define custom themes here - example for a "catppuccin" theme:
+# [theme.custom.catppuccin]
+# primary = "#89B4FA"
+# secondary = "#74C7EC"
+# accent = "#F5C2E7"
+# foreground = "#CDD6F4"
+# background = "#1E1E2E"
+# surface = "#313244"
+# panel = "#45475A"
+# success = "#A6E3A1"
+# warning = "#F9E2AF"
+# error = "#F38BA8"
+# dark = true
+
 [keybinds]
 send_message = "ctrl+enter"
 new_conversation = "ctrl+n"
@@ -30,6 +53,7 @@ scroll_up = "ctrl+k"
 scroll_down = "ctrl+j"
 command_palette = "ctrl+p"
 toggle_model_picker = "ctrl+m"
+toggle_theme_picker = "ctrl+t"
 save_conversation = "ctrl+s"
 load_conversation = "ctrl+l"
 export_conversation = "ctrl+e"

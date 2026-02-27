@@ -54,6 +54,7 @@ from .screens import (
     InfoScreen,
     SimplePickerScreen,
     TextPromptScreen,
+    ThemePickerScreen,
 )
 from .state import ConnectionState, ConversationState, StateManager
 from .task_manager import TaskManager
@@ -409,6 +410,7 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "Copy Last",
         "toggle_conversation_picker": "Conversations",
         "toggle_prompt_preset_picker": "Prompt",
+        "toggle_theme_picker": "Theme",
         "interrupt_stream": "Interrupt",
     }
 
@@ -551,7 +553,11 @@ class OllamaChatApp(App[None]):
         )
         self.command_manager = CommandManager()
         self._register_all_commands()
-        self.theme_manager = ThemeManager(self.config)
+        self.theme_manager = ThemeManager(
+            self.config, 
+            app_name=str(self.config["app"]["title"]).lower().replace(" ", "-"),
+            app_author=str(self.config["app"]["class"])
+        )
 
         # Phase 2B managers - extracted to reduce god class complexity
         self.stream_manager = StreamManager(
@@ -857,6 +863,25 @@ class OllamaChatApp(App[None]):
             )
         self.sub_title = f"Prompt preset set: {selected}"
 
+    async def action_toggle_theme_picker(self) -> None:
+        """Open theme picker and apply selection."""
+        available_themes = self.theme_manager.get_available_themes(self)
+        current_theme = self.theme_manager.current_theme_name
+        
+        selected = await self.push_screen_wait(
+            ThemePickerScreen(available_themes, current_theme)
+        )
+        if not selected:
+            return
+            
+        success = self.theme_manager.switch_theme(selected, self)
+        if success:
+            self.sub_title = f"Theme switched to: {selected}"
+            # Refresh message bubbles to apply new theme
+            self._restyle_rendered_bubbles()
+        else:
+            self.sub_title = f"Failed to switch theme: {selected}"
+
     async def _load_conversation_payload(self, payload: dict[str, Any]) -> None:
         """Apply a loaded conversation payload to the chat and re-render the UI."""
         try:
@@ -1094,22 +1119,14 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Model preparation failed."
 
     def _apply_theme(self) -> None:
-        """Apply fallback theme settings and restyle mounted widgets."""
-        ui_cfg = self.config["ui"]
-        use_theme_palette = self._using_theme_palette()
-        if hasattr(self, "theme_variables") and isinstance(self.theme_variables, dict):
-            fallback_variables = {
-                "fallback_background": str(ui_cfg["background_color"]),
-                "fallback_panel": str(ui_cfg["border_color"]),
-                "fallback_user_message": str(ui_cfg["user_message_color"]),
-                "fallback_assistant_message": str(ui_cfg["assistant_message_color"]),
-            }
-            for key, value in fallback_variables.items():
-                self.theme_variables.setdefault(key, value)
-
+        """Apply theme settings using ThemeManager and restyle mounted widgets."""
+        # Initialize theme system
+        self.theme_manager.initialize_theme(self)
+        
+        # Apply background for custom themes
         try:
             root = self.query_one("#app-root", Container)
-            if not use_theme_palette:
+            if not self.theme_manager.is_using_textual_theme:
                 bg = self.theme_manager.get_background_color()
                 root.styles.background = str(bg)
         except Exception:
