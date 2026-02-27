@@ -50,7 +50,7 @@ class ConversationManager:
             Conversation payload with messages and metadata
         """
         try:
-            payload = self.persistence.load(path)
+            payload = self.persistence.load_conversation(path)
             self._current_conversation_path = path
             LOGGER.info(f"Loaded conversation from {path}")
             return payload
@@ -65,49 +65,63 @@ class ConversationManager:
             payload: Conversation data (messages, model, etc.)
         """
         # Apply payload to chat client
-        self.chat.set_model(payload.get("model", self.chat.model))
-        self.chat.set_messages(payload.get("messages", []))
-        self.chat.set_system_message(payload.get("system_message", ""))
+        model = payload.get("model", self.chat.model)
+        if isinstance(model, str) and model.strip():
+            self.chat.set_model(model.strip())
 
-    async def save_current(self, path: Path | None = None) -> None:
-        """Save current conversation.
+        messages = payload.get("messages", [])
+        if isinstance(messages, list):
+            self.chat.load_history(messages)
+
+        # Backcompat: update system prompt if provided explicitly
+        sys_msg = payload.get("system_message")
+        if isinstance(sys_msg, str) and sys_msg.strip():
+            try:
+                self.chat.system_prompt = sys_msg.strip()
+                self.chat.message_store = self.chat.message_store.__class__(
+                    system_prompt=sys_msg.strip(),
+                    max_history_messages=self.chat.message_store.max_history_messages,
+                    max_context_tokens=self.chat.message_store.max_context_tokens,
+                )
+            except Exception:
+                # Non-fatal; continue with loaded history
+                pass
+
+    async def save_snapshot(self, name: str = "") -> Path:
+        """Save current conversation using persistence's snapshot format.
 
         Args:
-            path: File path, or None to use current path
+            name: Optional friendly name for the snapshot
+
+        Returns:
+            Path to the saved snapshot
         """
-        save_path = path or self._current_conversation_path
-        if not save_path:
-            raise ValueError("No save path specified")
-
-        payload = {
-            "model": self.chat.model,
-            "messages": self.chat.messages,
-            "system_message": self.chat.system_message,
-            "timestamp": self.persistence._timestamp(),
-        }
-
-        self.persistence.save(save_path, payload)
-        self._current_conversation_path = save_path
-        LOGGER.info(f"Saved conversation to {save_path}")
+        target = self.persistence.save_conversation(
+            self.chat.messages,
+            self.chat.model,
+            name=name,
+        )
+        self._current_conversation_path = target
+        LOGGER.info(f"Saved conversation to {target}")
+        return target
 
     def auto_save_on_exit(self) -> None:
         """Auto-save current conversation on application exit."""
         if not self.auto_save_enabled:
             return
 
+        if not getattr(self.persistence, "enabled", True):
+            return
+
         if not self.chat.messages:
             return  # Nothing to save
 
         try:
-            # Use persistence auto-save
-            path = self.persistence.auto_save_path()
-            payload = {
-                "model": self.chat.model,
-                "messages": self.chat.messages,
-                "system_message": self.chat.system_message,
-            }
-            self.persistence.save(path, payload)
-            LOGGER.info(f"Auto-saved conversation to {path}")
+            target = self.persistence.save_conversation(
+                self.chat.messages, self.chat.model, name="Auto-save"
+            )
+            self._current_conversation_path = target
+            LOGGER.info(f"Auto-saved conversation to {target}")
         except Exception as e:
             LOGGER.error(f"Auto-save failed: {e}")
 
@@ -117,4 +131,21 @@ class ConversationManager:
         Returns:
             List of conversation file paths, most recent first
         """
-        return self.persistence.list_conversations(limit=limit)
+        rows = self.persistence.list_conversations()
+        paths: list[Path] = []
+        for row in rows[: max(0, limit)]:
+            raw = row.get("path") if isinstance(row, dict) else None
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    paths.append(Path(raw).expanduser())
+                except Exception:
+                    continue
+        return paths
+
+    async def load_latest(self) -> dict[str, Any] | None:
+        """Load the most recent conversation payload (if any)."""
+        try:
+            return self.persistence.load_latest_conversation()
+        except Exception as e:
+            LOGGER.error(f"Failed to load latest conversation: {e}")
+            raise

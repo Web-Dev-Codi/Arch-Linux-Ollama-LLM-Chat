@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 import inspect
@@ -49,13 +50,19 @@ from .task_manager import TaskManager
 from .managers.command import CommandManager
 from .managers.connection import ConnectionManager
 from .managers.conversation import ConversationManager
+from .managers.capability import CapabilityManager
 from .managers.theme import ThemeManager
 from .tooling import (
     ToolRegistry,
+    ToolSpec,
     ToolRegistryOptions,
     ToolRuntimeOptions,
     build_registry,
+    _run_async_from_sync,
 )
+from .tools.base import ToolContext
+from .plugins.interface import PluginManager
+from .events.bus import event_bus as app_event_bus
 from .widgets.activity_bar import ActivityBar
 from .widgets.conversation import ConversationView
 from .widgets.input_box import InputBox
@@ -479,7 +486,7 @@ class OllamaChatApp(App[None]):
         self.connection_manager = ConnectionManager(
             self.chat,
             check_interval_seconds=int(
-                config["app"]["connection_check_interval_seconds"]
+                self.config["app"]["connection_check_interval_seconds"]
             ),
         )
         self.connection_manager.on_state_change(self._on_connection_state_changed)
@@ -580,6 +587,18 @@ class OllamaChatApp(App[None]):
         self._register_all_commands()
         self.theme_manager = ThemeManager(self.config)
         self._last_prompt_path = self.persistence.directory / "last_prompt.txt"
+        # Ensure the slash menu/help include all registered commands.
+        try:
+            existing = {cmd for cmd, _ in self._slash_commands}
+            for cmd, desc in self.command_manager.get_commands():
+                if cmd not in existing:
+                    self._slash_commands.append((cmd, desc))
+        except Exception:
+            pass
+        # Initialize event bus and plugin manager
+        self.event_bus = app_event_bus
+        self.plugin_manager = PluginManager()
+        self._setup_event_subscribers()
         self._load_last_prompt()
         self._binding_specs = self._binding_specs_from_config(self.config)
         self._apply_terminal_window_identity()
@@ -848,14 +867,11 @@ class OllamaChatApp(App[None]):
 
     async def _load_conversation_payload(self, payload: dict[str, Any]) -> None:
         """Apply a loaded conversation payload to the chat and re-render the UI."""
-        messages = payload.get("messages", [])
-        model = payload.get("model", self.chat.model)
-        if not isinstance(messages, list):
+        try:
+            await self.conversation_manager.load_payload(payload)
+        except Exception:
             self.sub_title = "Saved conversation format is invalid."
             return
-        self.chat.load_history(messages)  # type: ignore[arg-type]
-        if isinstance(model, str) and model.strip():
-            self.chat.set_model(model.strip())
         await self._clear_conversation_view()
         await self._render_messages_from_history(self.chat.messages)
         self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
@@ -863,7 +879,7 @@ class OllamaChatApp(App[None]):
 
     async def _load_conversation_from_path(self, path: Path) -> None:
         try:
-            payload = self.persistence.load_conversation(path)
+            payload = await self.conversation_manager.load_from_path(path)
         except Exception:
             self.sub_title = "Failed to load conversation."
             return
@@ -912,6 +928,112 @@ class OllamaChatApp(App[None]):
         attach_button.disabled = not self.capabilities.vision_enabled
         self._w_file.disabled = False
         self._update_status_bar()
+
+        # Initialize plugins and register their commands (tools are integrated via ToolRegistry build at startup)
+        try:
+            context = {
+                "app": self,
+                "config": self.config,
+                "event_bus": self.event_bus,
+                "command_manager": self.command_manager,
+                "tool_registry": self._tool_registry,
+            }
+            await self.plugin_manager.initialize_all(context)
+            plugin_commands = self.plugin_manager.get_all_commands()
+            existing = {cmd for cmd, _ in self._slash_commands}
+            for name, handler in (plugin_commands or {}).items():
+                cmd_name = name.lstrip("/")
+                async def _wrapped(args: str, _h=handler):
+                    if inspect.iscoroutinefunction(_h):
+                        await _h(args)
+                    else:
+                        await asyncio.to_thread(_h, args)
+                self.command_manager.register(cmd_name, _wrapped, "Plugin command")
+                display = "/" + cmd_name
+                if display not in existing:
+                    self._slash_commands.append((display, "Plugin command"))
+                    existing.add(display)
+
+            # Register plugin tools into the ToolRegistry
+            if self._tool_registry is not None:
+                try:
+                    plugin_tools = self.plugin_manager.get_all_tools()
+                except Exception:
+                    plugin_tools = []
+                runtime_opts = getattr(
+                    self._tool_registry, "_runtime_options", ToolRuntimeOptions()
+                )
+                for tool in plugin_tools:
+                    try:
+                        name = getattr(tool, "id", "")
+                        if not name:
+                            continue
+                        # Obtain parameters schema
+                        try:
+                            ollama_schema = tool.to_ollama_schema()
+                            func_dict = ollama_schema.get("function", {})
+                            schema = func_dict.get(
+                                "parameters",
+                                {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": [],
+                                    "additionalProperties": True,
+                                },
+                            )
+                        except Exception:
+                            try:
+                                legacy = tool.schema()
+                                schema = legacy.get(
+                                    "parameters",
+                                    {
+                                        "type": "object",
+                                        "properties": {},
+                                        "required": [],
+                                        "additionalProperties": True,
+                                    },
+                                )
+                            except Exception:
+                                schema = {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": [],
+                                    "additionalProperties": True,
+                                }
+
+                        def make_handler(t=tool):
+                            def handler(args: dict[str, Any]) -> str:
+                                async def _run() -> str:
+                                    ctx = ToolContext(
+                                        session_id="plugin",
+                                        message_id=str(time.time_ns()),
+                                        agent="ollama",
+                                        abort=asyncio.Event(),
+                                        extra={
+                                            "project_dir": runtime_opts.workspace_root,
+                                            "bypassCwdCheck": runtime_opts.allow_external_directories,
+                                        },
+                                    )
+                                    result = await t.run(args, ctx)
+                                    return str(result.output)
+
+                                return _run_async_from_sync(_run())
+
+                            return handler
+
+                        spec = ToolSpec(
+                            name=name,
+                            description=getattr(tool, "description", name),
+                            parameters_schema=schema,
+                            handler=make_handler(),
+                            safety_level="safe",
+                            category="plugin",
+                        )
+                        self._tool_registry.register_spec(spec)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
 
         self._slash_registry = self._build_slash_registry()
 
@@ -994,7 +1116,8 @@ class OllamaChatApp(App[None]):
         try:
             root = self.query_one("#app-root", Container)
             if not use_theme_palette:
-                root.styles.background = str(ui_cfg["background_color"])
+                bg = self.theme_manager.get_background_color()
+                root.styles.background = str(bg)
         except Exception:
             pass
 
@@ -1003,6 +1126,37 @@ class OllamaChatApp(App[None]):
     def watch_theme(self, *_args: str) -> None:
         """Ensure all widgets react when a Textual theme changes."""
         self._apply_theme()
+
+    def _setup_event_subscribers(self) -> None:
+        """Subscribe to support bus events for file changes and watchers."""
+        try:
+            from .support.bus import bus as support_bus
+
+            support_bus.subscribe("file.edited", self._on_support_file_event)
+            support_bus.subscribe(
+                "file.watcher.updated", self._on_support_file_event
+            )
+        except Exception:
+            pass
+
+    def _on_support_file_event(self, event: str, payload: dict[str, Any]) -> None:
+        """Handle file events from support bus (log-only)."""
+        try:
+            LOGGER.info(
+                "app.file.event",
+                extra={
+                    "event": event,
+                    "path": str(payload.get("file", "")),
+                    "detail": payload,
+                },
+            )
+            # Re-publish via app event bus asynchronously
+            try:
+                asyncio.create_task(self.event_bus.publish(event, payload))
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     @property
     def show_timestamps(self) -> bool:
@@ -1543,6 +1697,10 @@ class OllamaChatApp(App[None]):
         """Cancel and await all background tasks during shutdown."""
         self._auto_save_on_exit()
         await self._transition_state(ConversationState.CANCELLING)
+        try:
+            self.plugin_manager.shutdown_all()
+        except Exception:
+            pass
         await self.connection_manager.stop_monitoring()
         await self._task_manager.cancel_all()
         await self._transition_state(ConversationState.IDLE)
@@ -1575,10 +1733,18 @@ class OllamaChatApp(App[None]):
             return
         try:
             name = await self._prompt_conversation_name()
-            path = self.persistence.save_conversation(
-                self.chat.messages, self.chat.model, name=name
-            )
+            path = await self.conversation_manager.save_snapshot(name)
             self.sub_title = f"Conversation saved: {path}"
+            try:
+                await self.event_bus.publish(
+                    "conversation.saved",
+                    {
+                        "path": str(path),
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                )
+            except Exception:
+                pass
         except Exception:
             self.sub_title = "Failed to save conversation."
 
@@ -1591,7 +1757,7 @@ class OllamaChatApp(App[None]):
             self.sub_title = "Persistence is disabled in configuration."
             return
         try:
-            payload = self.persistence.load_latest_conversation()
+            payload = await self.conversation_manager.load_latest()
         except Exception:
             self.sub_title = "Failed to read saved conversations."
             return
@@ -1599,6 +1765,13 @@ class OllamaChatApp(App[None]):
             self.sub_title = "No saved conversation found."
             return
         await self._load_conversation_payload(payload)
+        try:
+            await self.event_bus.publish(
+                "conversation.loaded",
+                {"timestamp": datetime.now().isoformat()},
+            )
+        except Exception:
+            pass
 
     async def action_export_conversation(self) -> None:
         """Export current conversation to markdown."""
@@ -1691,6 +1864,17 @@ class OllamaChatApp(App[None]):
         if raw_text.startswith("/"):
             try:
                 handled = await self.command_manager.execute(raw_text)
+                try:
+                    await self.event_bus.publish(
+                        "command.executed",
+                        {
+                            "command": raw_text.split()[0],
+                            "success": bool(handled),
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    )
+                except Exception:
+                    pass
             except Exception:
                 self.sub_title = "Command failed."
                 return

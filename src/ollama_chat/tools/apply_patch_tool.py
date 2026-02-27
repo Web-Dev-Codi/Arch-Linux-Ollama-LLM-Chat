@@ -6,11 +6,13 @@ from typing import Any
 
 from ..support import lsp_client
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
+from .abstracts import FileOperationTool
+from .base import ParamsSchema, ToolContext, ToolResult
 from .utils import generate_unified_diff, notify_file_change, check_file_safety
 
 
 class ApplyPatchParams(ParamsSchema):
+    file_path: str
     patch_text: str
 
 
@@ -163,11 +165,13 @@ def _apply_update_chunks(old: str, chunks: list[tuple[str, str]]) -> str:
     return updated
 
 
-class ApplyPatchTool(Tool):
+class ApplyPatchTool(FileOperationTool):
     id = "apply_patch"
     params_schema = ApplyPatchParams
 
-    async def execute(self, params: ApplyPatchParams, ctx: ToolContext) -> ToolResult:
+    async def perform_operation(
+        self, file_path: Path, params: ApplyPatchParams, ctx: ToolContext
+    ) -> ToolResult:
         hunks = _parse_patch(params.patch_text)
         if not hunks:
             return ToolResult(
@@ -184,6 +188,7 @@ class ApplyPatchTool(Tool):
         for h in hunks:
             if isinstance(h, _AddHunk):
                 path = ctx.resolve_path(h.path)
+                await ctx.check_permission("apply_patch", [path])
                 await check_file_safety(path, ctx, assert_not_modified=False)
                 old_content = ""
                 new_content = h.content
@@ -193,6 +198,7 @@ class ApplyPatchTool(Tool):
                 actions.append(("add", (path, new_content)))
             elif isinstance(h, _DeleteHunk):
                 path = ctx.resolve_path(h.path)
+                await ctx.check_permission("apply_patch", [path])
                 await check_file_safety(path, ctx, assert_not_modified=False)
                 old_content = (
                     path.read_text(encoding="utf-8", errors="ignore")
@@ -206,9 +212,11 @@ class ApplyPatchTool(Tool):
                 actions.append(("delete", (path,)))
             elif isinstance(h, _UpdateHunk):
                 src = ctx.resolve_path(h.path)
+                await ctx.check_permission("apply_patch", [src])
                 await check_file_safety(src, ctx, assert_not_modified=False)
                 dst = ctx.resolve_path(h.move_to) if h.move_to else None
                 if dst is not None:
+                    await ctx.check_permission("apply_patch", [dst])
                     await check_file_safety(dst, ctx, assert_not_modified=False)
                 old_content = (
                     src.read_text(encoding="utf-8", errors="ignore")

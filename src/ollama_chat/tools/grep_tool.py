@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 import re
@@ -51,7 +52,7 @@ class GrepTool(SearchTool):
             code = proc.returncode if proc.returncode is not None else 0
             text = stdout.decode()
             if not text and code not in (0, 1, 2):
-                return ToolResult(title="grep", output="No files found.", metadata={})
+                return "No files found."
             lines = [ln for ln in text.splitlines() if ln.strip()]
             entries: list[tuple[str, int, str]] = []
             for ln in lines:

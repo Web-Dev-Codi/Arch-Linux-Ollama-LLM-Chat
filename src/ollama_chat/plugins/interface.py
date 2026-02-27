@@ -133,6 +133,23 @@ class PluginManager:
             tools.extend(plugin.get_tools())
         return tools
 
+    def get_all_commands(self) -> dict[str, Any]:
+        """Aggregate slash commands from all plugins.
+
+        Returns:
+            Dict of command_name -> handler
+        """
+        commands: dict[str, Any] = {}
+        for plugin in self._plugins.values():
+            try:
+                cmd_map = plugin.get_commands() or {}
+                if isinstance(cmd_map, dict):
+                    for name, handler in cmd_map.items():
+                        commands[name] = handler
+            except Exception:
+                continue
+        return commands
+
     def get_plugin(self, name: str) -> Plugin | None:
         """Get a specific plugin by name.
 
