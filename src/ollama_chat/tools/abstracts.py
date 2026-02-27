@@ -161,11 +161,17 @@ class SearchTool(Tool):
 
     async def execute(self, params: SearchParams, ctx: ToolContext) -> ToolResult:
         """Execute search with common handling."""
-        # Resolve search path
-        search_path = ctx.resolve_path(params.path)
+        # Resolve search path (not all tools provide path; default to ".")
+        search_path = ctx.resolve_path(getattr(params, "path", ".") or ".")
 
         # Centralized permission check
         await ctx.check_permission(self.id, [search_path])
+
+        # Compute a helpful title detail: prefer pattern, fall back to path
+        detail = getattr(params, "pattern", None)
+        if detail is None:
+            detail = getattr(params, "path", None)
+        title = f"{self.id}: {detail}" if detail else self.id
 
         # Safety check
         try:
@@ -177,7 +183,7 @@ class SearchTool(Tool):
             )
         except Exception as exc:
             return ToolResult(
-                title=f"{self.id}: {params.pattern}",
+                title=title,
                 output=f"Permission denied: {exc}",
                 metadata={"ok": False, "count": 0},
             )
@@ -187,20 +193,22 @@ class SearchTool(Tool):
             results = await self.perform_search(search_path, params, ctx)
         except Exception as exc:
             return ToolResult(
-                title=f"{self.id}: {params.pattern}",
+                title=title,
                 output=f"Search failed: {exc}",
                 metadata={"ok": False, "count": 0},
             )
 
         # Format result
+        meta = {
+            "ok": True,
+            "count": len(results.split("\n")) if results else 0,
+        }
+        if getattr(params, "pattern", None) is not None:
+            meta["pattern"] = getattr(params, "pattern")
         return ToolResult(
-            title=f"{self.id}: {params.pattern}",
+            title=title,
             output=results,
-            metadata={
-                "ok": True,
-                "count": len(results.split("\n")) if results else 0,
-                "pattern": params.pattern,
-            },
+            metadata=meta,
         )
 
     @abstractmethod
