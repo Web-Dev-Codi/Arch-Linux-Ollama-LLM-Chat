@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 import re
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import check_file_safety
+from .abstracts import SearchTool
+from .base import ParamsSchema, ToolContext
 
 MAX_LINE_LENGTH = 2000
 MAX_RESULTS = 100
@@ -18,21 +17,15 @@ class GrepParams(ParamsSchema):
     include: str | None = None  # file glob filter, e.g. "*.py"
 
 
-class GrepTool(Tool):
+class GrepTool(SearchTool):
     id = "grep"
     params_schema = GrepParams
 
-    async def execute(self, params: GrepParams, ctx: ToolContext) -> ToolResult:
+    async def perform_search(
+        self, path: Path, params: GrepParams, ctx: ToolContext
+    ) -> str:
         pattern = params.pattern
-        search_root = ctx.resolve_path(params.path or ".")
-
-        await ctx.ask(
-            permission="grep",
-            patterns=[pattern],
-            always=["*"],
-            metadata={"pattern": pattern, "path": str(search_root)},
-        )
-        await check_file_safety(search_root, ctx, assert_not_modified=False)
+        search_root = path
 
         rg = "rg"
         try:
@@ -89,17 +82,13 @@ class GrepTool(Tool):
             output = f"Found {len(entries)} matches\n" + "\n".join(out_lines)
             if truncated:
                 output += "\n... results truncated; refine your query."
-            return ToolResult(
-                title="grep", output=output, metadata={"truncated": truncated}
-            )
+            return output
         except FileNotFoundError:
             # Fallback: Python regex across files
             try:
                 regex = re.compile(pattern)
             except re.error as exc:
-                return ToolResult(
-                    title="grep", output=f"Invalid regex: {exc}", metadata={"ok": False}
-                )
+                return f"Invalid regex: {exc}"
 
             files: list[Path] = []
             target = search_root
@@ -122,10 +111,6 @@ class GrepTool(Tool):
                 except Exception:
                     continue
             if not matches:
-                return ToolResult(title="grep", output="No files found.", metadata={})
+                return "No files found."
             out_lines = [f"{fp}:\n  Line {n}: {txt}" for fp, n, txt in matches]
-            return ToolResult(
-                title="grep",
-                output=f"Found {len(matches)} matches\n" + "\n".join(out_lines),
-                metadata={},
-            )
+            return f"Found {len(matches)} matches\n" + "\n".join(out_lines)

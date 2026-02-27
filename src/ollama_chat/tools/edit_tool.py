@@ -5,8 +5,9 @@ from pathlib import Path
 from ..support import lsp_client
 from ..support import file_time as file_time_service
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import generate_unified_diff, notify_file_change, check_file_safety
+from .abstracts import FileOperationTool
+from .base import ParamsSchema, ToolContext, ToolResult
+from .utils import generate_unified_diff
 
 
 class EditParams(ParamsSchema):
@@ -16,20 +17,19 @@ class EditParams(ParamsSchema):
     replace_all: bool = False
 
 
-class EditTool(Tool):
+class EditTool(FileOperationTool):
     id = "edit"
     params_schema = EditParams
 
-    async def execute(self, params: EditParams, ctx: ToolContext) -> ToolResult:
+    async def perform_operation(
+        self, file_path: Path, params: EditParams, ctx: ToolContext
+    ) -> ToolResult:
         if params.old_string == params.new_string:
             return ToolResult(
-                title=params.file_path,
+                title=str(file_path),
                 output="No changes to apply.",
                 metadata={"ok": False},
             )
-
-        file_path = ctx.resolve_path(params.file_path)
-        await check_file_safety(file_path, ctx, assert_not_modified=False)
 
         # Special case: create new file when old_string is empty
         if params.old_string == "":
@@ -46,22 +46,10 @@ class EditTool(Tool):
                 file_path.write_text(params.new_string, encoding="utf-8")
 
             await file_time_service.with_lock(str(file_path), _write)
-            try:
-                await notify_file_change(file_path, "create", ctx)
-            except Exception:
-                pass
             return ToolResult(
-                title=str(file_path), output="File created.", metadata={"created": True}
-            )
-
-        # Otherwise, require prior read
-        try:
-            await check_file_safety(
-                file_path, ctx, check_external=False, assert_not_modified=True
-            )
-        except Exception as exc:
-            return ToolResult(
-                title=str(file_path), output=str(exc), metadata={"ok": False}
+                title=str(file_path),
+                output="File created.",
+                metadata={"ok": True, "created": True, "event": "create"},
             )
 
         try:
@@ -105,11 +93,6 @@ class EditTool(Tool):
 
         await file_time_service.with_lock(str(file_path), _write)
 
-        try:
-            await notify_file_change(file_path, "change", ctx)
-        except Exception:
-            pass
-
         # LSP diagnostics
         try:
             diagnostics = lsp_client.get_diagnostics()
@@ -127,5 +110,7 @@ class EditTool(Tool):
             output = f"Applied {'all' if params.replace_all else 'one'} replacement successfully."
 
         return ToolResult(
-            title=str(file_path), output=output, metadata={"changed": True}
+            title=str(file_path),
+            output=output,
+            metadata={"ok": True, "changed": True, "event": "change"},
         )

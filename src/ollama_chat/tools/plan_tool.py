@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from support import question_service
+from ..support import question_service
 
 from .base import ParamsSchema, Tool, ToolContext, ToolResult
 

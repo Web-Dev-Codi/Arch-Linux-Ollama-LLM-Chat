@@ -46,8 +46,10 @@ from .screens import (
 from .state import ConnectionState, ConversationState, StateManager
 from .stream_handler import StreamHandler
 from .task_manager import TaskManager
+from .managers.command import CommandManager
 from .managers.connection import ConnectionManager
-from .managers.capability import CapabilityManager
+from .managers.conversation import ConversationManager
+from .managers.theme import ThemeManager
 from .tooling import (
     ToolRegistry,
     ToolRegistryOptions,
@@ -568,11 +570,82 @@ class OllamaChatApp(App[None]):
             directory=str(persistence_cfg["directory"]),
             metadata_path=str(persistence_cfg["metadata_path"]),
         )
+
+        self.conversation_manager = ConversationManager(
+            self.chat,
+            self.persistence,
+            auto_save_enabled=bool(persistence_cfg.get("auto_save", True)),
+        )
+        self.command_manager = CommandManager()
+        self._register_all_commands()
+        self.theme_manager = ThemeManager(self.config)
         self._last_prompt_path = self.persistence.directory / "last_prompt.txt"
         self._load_last_prompt()
         self._binding_specs = self._binding_specs_from_config(self.config)
         self._apply_terminal_window_identity()
         super().__init__()
+
+    def _register_all_commands(self) -> None:
+        self.command_manager.register(
+            "clear", self._handle_clear_command, "Clear the input"
+        )
+        self.command_manager.register(
+            "new", self._handle_new_command, "Start a new conversation"
+        )
+        self.command_manager.register(
+            "save", self._handle_save_command, "Save conversation"
+        )
+        self.command_manager.register(
+            "load", self._handle_load_command, "Load most recent conversation"
+        )
+        self.command_manager.register(
+            "image", self._handle_image_command, "Attach image from filesystem"
+        )
+        self.command_manager.register(
+            "file", self._handle_file_command, "Attach file as context"
+        )
+        self.command_manager.register(
+            "export", self._handle_export_command, "Export conversation to markdown"
+        )
+        self.command_manager.register(
+            "help", self._handle_help_command, "Show help"
+        )
+
+    async def _handle_clear_command(self, _args: str) -> None:
+        input_widget = self._w_input or self.query_one("#message_input", Input)
+        input_widget.value = ""
+        self.sub_title = "Input cleared."
+
+    async def _handle_new_command(self, _args: str) -> None:
+        await self.action_new_conversation()
+
+    async def _handle_save_command(self, _args: str) -> None:
+        await self.action_save_conversation()
+
+    async def _handle_load_command(self, _args: str) -> None:
+        await self.action_load_conversation()
+
+    async def _handle_export_command(self, _args: str) -> None:
+        await self.action_export_conversation()
+
+    async def _handle_help_command(self, _args: str) -> None:
+        await self.action_command_palette()
+
+    async def _handle_image_command(self, args: str) -> None:
+        raw_path = args.strip()
+        if not raw_path:
+            self.sub_title = "/image requires a file path"
+            return
+        self._attachments.add_image(raw_path)
+        self.sub_title = f"Attached image: {raw_path}"
+
+    async def _handle_file_command(self, args: str) -> None:
+        raw_path = args.strip()
+        if not raw_path:
+            self.sub_title = "/file requires a file path"
+            return
+        self._attachments.add_file(raw_path)
+        self.sub_title = f"Attached file: {raw_path}"
 
     def _load_last_prompt(self) -> None:
         try:
@@ -953,17 +1026,19 @@ class OllamaChatApp(App[None]):
 
     def _style_bubble(self, bubble: MessageBubble, role: str) -> None:
         bubble.styles.align_horizontal = "right" if role == "user" else "left"
-        if not self._using_theme_palette():
-            self._apply_custom_theme(bubble, role, self.config["ui"])
+        self.theme_manager.apply_to_bubble(bubble, role)
 
     def _restyle_rendered_bubbles(self) -> None:
         try:
             conversation = self._w_conversation or self.query_one(ConversationView)
         except Exception:
             return
-        for bubble in conversation.children:
-            if isinstance(bubble, MessageBubble):
-                self._style_bubble(bubble, bubble.role)
+        bubbles = [
+            bubble
+            for bubble in conversation.children
+            if isinstance(bubble, MessageBubble)
+        ]
+        self.theme_manager.restyle_all_bubbles(bubbles)
 
     def _using_theme_palette(self) -> bool:
         return bool(getattr(self, "theme", ""))
@@ -1460,21 +1535,9 @@ class OllamaChatApp(App[None]):
 
     def _auto_save_on_exit(self) -> None:
         """Persist conversation on exit when auto_save is enabled."""
-        persistence_cfg = self.config.get("persistence", {})
-        if not bool(persistence_cfg.get("enabled", False)):
+        if not self.persistence.enabled:
             return
-        if not bool(persistence_cfg.get("auto_save", True)):
-            return
-        non_system = [m for m in self.chat.messages if m.get("role") != "system"]
-        if not non_system:
-            return
-        try:
-            self.persistence.save_conversation(self.chat.messages, self.chat.model)
-            LOGGER.info("app.auto_save", extra={"event": "app.auto_save"})
-        except Exception:  # noqa: BLE001
-            LOGGER.warning(
-                "app.auto_save.failed", extra={"event": "app.auto_save.failed"}
-            )
+        self.conversation_manager.auto_save_on_exit()
 
     async def on_unmount(self) -> None:
         """Cancel and await all background tasks during shutdown."""
@@ -1626,7 +1689,12 @@ class OllamaChatApp(App[None]):
 
         # Intercept slash commands before sending to LLM.
         if raw_text.startswith("/"):
-            if await self._dispatch_slash_command(raw_text):
+            try:
+                handled = await self.command_manager.execute(raw_text)
+            except Exception:
+                self.sub_title = "Command failed."
+                return
+            if handled:
                 return
 
         directives = parse_inline_directives(

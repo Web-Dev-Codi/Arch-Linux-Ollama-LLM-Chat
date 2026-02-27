@@ -8,8 +8,8 @@ from pathlib import Path
 from ..support import file_time as file_time_service
 from ..support import lsp_client
 
-from .base import Attachment, ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import check_file_safety
+from .abstracts import FileOperationTool
+from .base import Attachment, ParamsSchema, ToolContext, ToolResult
 
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000
@@ -22,23 +22,13 @@ class ReadParams(ParamsSchema):
     limit: int | None = None  # default DEFAULT_READ_LIMIT
 
 
-class ReadTool(Tool):
+class ReadTool(FileOperationTool):
     id = "read"
     params_schema = ReadParams
 
-    async def execute(self, params: ReadParams, ctx: ToolContext) -> ToolResult:
-        file_path = ctx.resolve_path(params.file_path)
-
-        bypass_check = bool(ctx.extra.get("bypassCwdCheck"))
-        if not bypass_check:
-            await check_file_safety(file_path, ctx, assert_not_modified=False)
-        await ctx.ask(
-            permission="read",
-            patterns=[str(file_path)],
-            always=["*"],
-            metadata={},
-        )
-
+    async def perform_operation(
+        self, file_path: Path, params: ReadParams, ctx: ToolContext
+    ) -> ToolResult:
         if not file_path.exists():
             parent = file_path.parent
             name = file_path.name.lower()
@@ -72,7 +62,11 @@ class ReadTool(Tool):
                 + "\n".join(lines)
                 + "\n</entries>"
             )
-            return ToolResult(title=str(file_path), output=content, metadata={})
+            return ToolResult(
+                title=str(file_path),
+                output=content,
+                metadata={"ok": True},
+            )
 
         # MIME and attachment handling for images and PDFs
         mime, _ = mimetypes.guess_type(str(file_path))
@@ -91,7 +85,7 @@ class ReadTool(Tool):
                 return ToolResult(
                     title=str(file_path),
                     output="Binary attachment returned.",
-                    metadata={"attachment": True},
+                    metadata={"ok": True, "attachment": True},
                     attachments=[attachment],
                 )
         except Exception:
@@ -161,4 +155,4 @@ class ReadTool(Tool):
         except Exception:
             pass
 
-        return ToolResult(title=str(file_path), output=content, metadata={})
+        return ToolResult(title=str(file_path), output=content, metadata={"ok": True})

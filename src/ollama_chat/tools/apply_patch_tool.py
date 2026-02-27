@@ -270,5 +270,7 @@ class ApplyPatchTool(Tool):
 
         output = "\n".join(changed) if changed else "No changes applied."
         return ToolResult(
-            title="apply_patch", output=output, metadata={"changed": len(changed)}
+            title="apply_patch",
+            output=output,
+            metadata={"ok": True, "changed": len(changed), "event": "change"},
         )

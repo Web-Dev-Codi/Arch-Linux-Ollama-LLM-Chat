@@ -99,6 +99,34 @@ class ToolContext:
             p = self.project_root / p
         return p.resolve()
 
+    async def check_permission(
+        self,
+        operation: str,
+        paths: list[Path],
+        *,
+        allow_workspace: bool = True,
+    ) -> None:
+        """Centralized permission checks for tool operations."""
+        from .external_directory import assert_external_directory
+
+        project_root = self.project_root
+        for path in paths:
+            resolved = path.resolve()
+            if allow_workspace:
+                try:
+                    resolved.relative_to(project_root)
+                    continue
+                except Exception:
+                    pass
+
+            await assert_external_directory(self, str(resolved))
+            await self.ask(
+                permission=operation,
+                patterns=[str(resolved)],
+                always=["*"],
+                metadata={"operation": operation, "path": str(resolved)},
+            )
+
 
 class ParamsSchema(BaseModel):
     """Base class for all tool parameter schemas."""

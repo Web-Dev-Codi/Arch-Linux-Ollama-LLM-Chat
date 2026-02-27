@@ -129,7 +129,9 @@ class ToolsPackageAdapter:
         self._metadata_cb = metadata_cb
 
     def to_specs(self) -> list[ToolSpec]:
-        specs: list[ToolSpec] = []
+        """Convert built-in tool classes to ToolSpec objects."""
+        from .tools.registry import get_registry
+
         # Ensure modules that import `from support import ...` can resolve the local
         # package alias (ollama_chat.support) without modifying their import lines.
         try:
@@ -144,6 +146,7 @@ class ToolsPackageAdapter:
             tools = get_registry().tools_for_model()
         except Exception:
             tools = []
+        specs = []
         for tool in tools:
             name = getattr(tool, "id", "")
             if not name:
@@ -225,6 +228,19 @@ class ToolsPackageAdapter:
                     category="builtin",
                 )
             )
+
+        for spec in list(specs):
+            if spec.name == "todowrite":
+                specs.append(
+                    ToolSpec(
+                        name="todo",
+                        description=spec.description,
+                        parameters_schema=spec.parameters_schema,
+                        handler=spec.handler,
+                        safety_level=spec.safety_level,
+                        category=spec.category,
+                    )
+                )
         return specs
 
 
@@ -260,85 +276,12 @@ class ToolRegistry:
         names = set(self._tools.keys()) | set(self._specs.keys())
         return sorted(names)
 
-    def build_tools_list(self) -> list[dict[str, Any]]:
-        """Return Ollama-formatted tool schemas (no raw callables).
-
-        Converts all registered tools (both callables and ToolSpecs) into
-        properly formatted Ollama tool schemas with the structure:
-        {
-            "type": "function",
-            "function": {
-                "name": "...",
-                "description": "...",
-                "parameters": {...}
-            }
-        }
-        """
-        schemas: list[dict[str, Any]] = []
-
-        # Convert callable tools to schemas via introspection
-        for name, fn in self._tools.items():
-            try:
-                sig = signature(fn)
-                params: dict[str, Any] = {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                    "additionalProperties": True,
-                }
-
-                for param_name, param in sig.parameters.items():
-                    if param_name in ("self", "cls"):
-                        continue
-
-                    # Extract type hint if available
-                    param_type = "string"  # Default
-                    if param.annotation != Parameter.empty:
-                        ann_str = str(param.annotation).lower()
-                        if "int" in ann_str:
-                            param_type = "integer"
-                        elif "float" in ann_str or "number" in ann_str:
-                            param_type = "number"
-                        elif "bool" in ann_str:
-                            param_type = "boolean"
-                        elif "list" in ann_str or "sequence" in ann_str:
-                            param_type = "array"
-                        elif "dict" in ann_str or "mapping" in ann_str:
-                            param_type = "object"
-
-                    params["properties"][param_name] = {
-                        "type": param_type,
-                        "description": param_name,
-                    }
-
-                    # Mark as required if no default value
-                    if param.default == Parameter.empty:
-                        params["required"].append(param_name)
-
-                schemas.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": (fn.__doc__ or name).strip(),
-                            "parameters": params,
-                        },
-                    }
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    "tools.schema.introspection.failed",
-                    extra={
-                        "event": "tools.schema.introspection.failed",
-                        "tool": name,
-                        "error": str(exc),
-                    },
-                )
-
-        # Add ToolSpec schemas (already properly formatted)
-        schemas.extend([spec.as_ollama_tool() for spec in self._specs.values()])
-
-        return schemas
+    def build_tools_list(self) -> list[Any]:
+        """Return raw callables (legacy) and ToolSpec schemas."""
+        tools: list[Any] = []
+        tools.extend(self._tools.values())
+        tools.extend([spec.as_ollama_tool() for spec in self._specs.values()])
+        return tools
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a named tool and return its string result.
@@ -354,7 +297,14 @@ class ToolRegistry:
         spec = self._specs.get(name)
         if spec is not None:
             try:
-                # ToolSpec handlers do their own validation if needed
+                required = spec.parameters_schema.get("required", [])
+                if isinstance(required, list):
+                    missing = [k for k in required if k not in arguments]
+                    if missing:
+                        raise OllamaToolError(
+                            f"Tool {name!r} missing required arguments: {', '.join(missing)}"
+                        )
+
                 result = str(spec.handler(arguments))
                 trunc_result = _run_async_from_sync(
                     truncate_output(

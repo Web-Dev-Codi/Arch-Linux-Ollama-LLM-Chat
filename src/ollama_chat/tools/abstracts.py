@@ -71,7 +71,10 @@ class FileOperationTool(Tool):
         # Resolve path using ToolContext helper
         file_path = ctx.resolve_path(params.file_path)
 
-        # Safety checks (external directory, concurrent access)
+        # Centralized permission check (external directory gating only).
+        await ctx.check_permission(self.id, [file_path])
+
+        # Safety checks (modified-since-read and other invariants)
         try:
             await check_file_safety(
                 file_path,
@@ -160,6 +163,9 @@ class SearchTool(Tool):
         """Execute search with common handling."""
         # Resolve search path
         search_path = ctx.resolve_path(params.path)
+
+        # Centralized permission check
+        await ctx.check_permission(self.id, [search_path])
 
         # Safety check
         try:

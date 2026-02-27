@@ -5,8 +5,9 @@ from pathlib import Path
 from ..support import lsp_client
 from ..support import file_time as file_time_service
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import generate_unified_diff, notify_file_change, check_file_safety
+from .abstracts import FileOperationTool
+from .base import ParamsSchema, ToolContext, ToolResult
+from .utils import generate_unified_diff
 
 
 class WriteParams(ParamsSchema):
@@ -14,23 +15,17 @@ class WriteParams(ParamsSchema):
     content: str
 
 
-class WriteTool(Tool):
+class WriteTool(FileOperationTool):
     id = "write"
     params_schema = WriteParams
 
-    async def execute(self, params: WriteParams, ctx: ToolContext) -> ToolResult:
-        file_path = ctx.resolve_path(params.file_path)
-
+    async def perform_operation(
+        self, file_path: Path, params: WriteParams, ctx: ToolContext
+    ) -> ToolResult:
         exists = file_path.exists()
         old_content = ""
         if exists:
             old_content = file_path.read_text(encoding="utf-8", errors="replace")
-            try:
-                await check_file_safety(file_path, ctx, assert_not_modified=True)
-            except Exception as exc:
-                return ToolResult(
-                    title=str(file_path), output=str(exc), metadata={"ok": False}
-                )
 
         diff_str = generate_unified_diff(old_content, params.content, file_path)
         await ctx.ask(
@@ -46,12 +41,6 @@ class WriteTool(Tool):
 
         # Serialize concurrent writes
         await file_time_service.with_lock(str(file_path), _write)
-
-        # Notify all systems of file change
-        try:
-            await notify_file_change(file_path, "change" if exists else "create", ctx)
-        except Exception:
-            pass
 
         try:
             file_time_service.record_read(ctx.session_id, str(file_path))
@@ -92,5 +81,7 @@ class WriteTool(Tool):
             output = "Wrote file successfully."
 
         return ToolResult(
-            title=str(file_path), output=output, metadata={"changed": True}
+            title=str(file_path),
+            output=output,
+            metadata={"ok": True, "changed": True, "event": "change" if exists else "create"},
         )

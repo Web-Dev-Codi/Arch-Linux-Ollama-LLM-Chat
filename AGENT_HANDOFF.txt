@@ -1,0 +1,121 @@
+===== COPY BELOW THIS LINE AND PASTE TO NEXT AGENT =====
+
+Complete the remaining 25% of the Arch-Linux-Ollama-LLM-Chat refactoring (Phases 2-4).
+
+**Current State:**
+- Branch: `refactor` (10 commits ahead, working tree clean)
+- Phase 1: ✅ 100% complete (-1,476 LOC eliminated)
+- Phase 2: 🟡 40% complete (2/5 managers integrated, 3 templates ready)
+- Phase 3: 🟡 20% complete (abstract classes created, not applied to tools)
+- Phase 4: 🟡 30% complete (event bus/plugins created, not integrated)
+- app.py: 1,862 LOC → Target: ~1,400-1,500 LOC
+
+**Your Mission - 3 Weeks:**
+
+**Week 1: Complete Phase 2 (Manager Integration)**
+Read `REFACTORING_IMPLEMENTATION_PLAN.md` lines 877-1175 for detailed instructions.
+
+1. Integrate ConversationManager (managers/conversation.py → app.py)
+   - Replace _load_conversation_from_path(), _load_conversation_payload()
+   - Replace action_save_conversation(), action_load_conversation()
+   - Wire auto-save in on_mount()
+   - Expected: ~200 LOC reduction
+
+2. Integrate CommandManager (managers/command.py → app.py)
+   - Register all slash commands: /clear, /new, /save, /load, /image, /file, /export, /help
+   - Replace slash command processing in input handler
+   - Expected: ~150 LOC reduction
+
+3. Integrate ThemeManager (managers/theme.py → app.py)
+   - Replace _apply_theme(), _style_bubble(), _restyle_rendered_bubbles()
+   - Apply themes via manager on widget creation and theme changes
+   - Expected: ~100 LOC reduction
+
+After completion: `git commit -m "Complete Phase 2: God class refactoring"` and `git tag -a v0.4.0-phase2`
+
+---
+
+**Week 2: Complete Phase 3 (Tool System Cleanup)**
+Read `REFACTORING_IMPLEMENTATION_PLAN.md` lines 1215-1415 for patterns.
+
+1. Refactor 7 tools to use abstract base classes (tools/abstracts.py):
+   - FileOperation tools (4): ReadTool, WriteTool, EditTool, ApplyPatchTool
+   - Search tools (3): GrepTool, GlobTool, LsTool
+   - Pattern: Change inheritance, rename execute() → perform_operation()/perform_search(), remove boilerplate
+   - Expected: ~200-250 LOC reduction
+
+2. Consolidate permission system:
+   - Add check_permission() to ToolContext in tools/base.py
+   - Update all tools to use centralized checking
+   - Expected: ~80-100 LOC reduction
+
+After completion: `git commit -m "Complete Phase 3: Tool system cleanup"` and `git tag -a v0.4.0-phase3`
+
+---
+
+**Week 3: Complete Phase 4 (Architecture Improvements)**
+Read `REFACTORING_IMPLEMENTATION_PLAN.md` lines 1444-1723 for integration steps.
+
+1. Integrate EventBus (events/bus.py):
+   - Create events/domain.py with typed event classes (FileEditedEvent, ConnectionStateChangedEvent, etc.)
+   - Initialize EventBus in app.py
+   - Set up subscribers in _setup_event_subscribers()
+   - Publish events from tools, managers, and app components
+
+2. Integrate Plugin System (plugins/interface.py):
+   - Create plugins/examples/ directory
+   - Initialize PluginManager in app.py
+   - Load plugins in on_mount(), disable in on_unmount()
+   - Create example plugin in plugins/examples/sample_plugin.py
+   - Wire plugin tools and commands into app
+
+After completion: `git commit -m "Complete Phase 4: Architecture improvements"` and `git tag -a v0.4.0-phase4`
+
+---
+
+**Week 4: Testing & Final Release**
+
+1. Run comprehensive tests:
+   - `uv run pytest tests/ -v`
+   - Manual testing: Start app, test slash commands, themes, save/load, tools
+   - Verify metrics: app.py ~1,400-1,500 LOC, total ~2,300 LOC eliminated
+
+2. Update documentation:
+   - REFACTORING_PROGRESS.md (set all phases to 100%)
+   - FINAL_STATUS.md (add completion date and final metrics)
+   - README.md (if needed)
+
+3. Create final release:
+   - `git commit -m "Release v0.4.0: Complete refactoring - eliminate 2,313 LOC"`
+   - `git tag -a v0.4.0 -m "Major refactoring release..."`
+   - **DO NOT PUSH** - leave for user to review
+
+---
+
+**Git Workflow (CRITICAL):**
+- After each phase: `git commit` with detailed message, then `git tag -a v0.4.0-phaseX`
+- Working tree must be clean before moving to next phase
+- Save all commits and tags locally
+- **DO NOT PUSH** until user reviews
+- Final tags: v0.4.0-phase2, v0.4.0-phase3, v0.4.0-phase4, v0.4.0
+
+**Success Criteria:**
+✅ app.py reduced to ~1,400-1,500 LOC (from 1,862)
+✅ 2,300+ total LOC eliminated
+✅ All 5 managers integrated and working
+✅ All 7 tools refactored with abstract bases
+✅ Event bus operational
+✅ Plugin system operational
+✅ All tests passing
+✅ All phases tagged
+✅ Working tree clean
+
+**Master Reference:** `REFACTORING_IMPLEMENTATION_PLAN.md` (1,939 lines) - Follow this for detailed step-by-step instructions.
+
+**Templates Ready:** All manager templates are complete implementations in src/ollama_chat/managers/, just need wiring into app.py.
+
+**Read First:** `CONTINUATION_PROMPT.md` for comprehensive details on each phase.
+
+Start with Phase 2.3 (ConversationManager integration) and work sequentially through all phases. Good luck! 🚀
+
+===== END OF AGENT HANDOFF =====

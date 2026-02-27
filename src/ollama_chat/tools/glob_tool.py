@@ -6,8 +6,8 @@ from pathlib import Path
 
 from ..support import ripgrep
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import check_file_safety
+from .abstracts import SearchTool
+from .base import ParamsSchema, ToolContext
 
 MAX_RESULTS = 100
 
@@ -17,21 +17,15 @@ class GlobParams(ParamsSchema):
     path: str | None = None  # default: project directory
 
 
-class GlobTool(Tool):
+class GlobTool(SearchTool):
     id = "glob"
     params_schema = GlobParams
 
-    async def execute(self, params: GlobParams, ctx: ToolContext) -> ToolResult:
+    async def perform_search(
+        self, path: Path, params: GlobParams, ctx: ToolContext
+    ) -> str:
         pattern = params.pattern
-        search_root = ctx.resolve_path(params.path or ".")
-
-        await ctx.ask(
-            permission="glob",
-            patterns=[pattern],
-            always=["*"],
-            metadata={"pattern": pattern, "path": str(search_root)},
-        )
-        await check_file_safety(search_root, ctx, assert_not_modified=False)
+        search_root = path
 
         files: list[str] = []
         # Try ripgrep first
@@ -74,6 +68,4 @@ class GlobTool(Tool):
         output = "\n".join(files)
         if truncated:
             output += "\n... results truncated; refine your search pattern."
-        return ToolResult(
-            title=f"glob: {pattern}", output=output, metadata={"truncated": truncated}
-        )
+        return output

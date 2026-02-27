@@ -4,8 +4,8 @@ from collections import defaultdict
 import os
 from pathlib import Path
 
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .utils import check_file_safety
+from .abstracts import SearchTool
+from .base import ParamsSchema, ToolContext
 
 IGNORE_PATTERNS = [
     "node_modules/",
@@ -40,20 +40,14 @@ class ListParams(ParamsSchema):
     ignore: list[str] | None = None
 
 
-class ListTool(Tool):
+class ListTool(SearchTool):
     id = "list"
     params_schema = ListParams
 
-    async def execute(self, params: ListParams, ctx: ToolContext) -> ToolResult:
-        search = ctx.resolve_path(params.path or ".")
-        await check_file_safety(search, ctx, assert_not_modified=False)
-        await ctx.ask(
-            permission="list",
-            patterns=[str(search)],
-            always=["*"],
-            metadata={"path": str(search)},
-        )
-
+    async def perform_search(
+        self, path: Path, params: ListParams, ctx: ToolContext
+    ) -> str:
+        search = path
         ignore = set(IGNORE_PATTERNS)
         for pat in params.ignore or []:
             if pat:
@@ -104,8 +98,4 @@ class ListTool(Tool):
             return out
 
         output = f"{str(search)}/\n" + render_dir(search, 0)
-        return ToolResult(
-            title=f"list: {str(search)}",
-            output=output.rstrip("\n"),
-            metadata={"count": len(files)},
-        )
+        return output.rstrip("\n")
