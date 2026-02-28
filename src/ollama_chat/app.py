@@ -410,8 +410,7 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "Copy Last",
         "toggle_conversation_picker": "Conversations",
         "toggle_prompt_preset_picker": "Prompt",
-        "toggle_theme_picker": "Theme (Ctrl+T)",
-        "test_action": "Test",
+        "toggle_theme_picker": "Theme",
         "interrupt_stream": "Interrupt",
     }
 
@@ -866,45 +865,26 @@ class OllamaChatApp(App[None]):
 
     async def action_toggle_theme_picker(self) -> None:
         """Open theme picker and apply selection."""
-        try:
-            available_themes = self.theme_manager.get_available_themes(self)
-            current_theme = self.theme_manager.current_theme_name
-            
-            # Debug: show available themes
-            theme_count = len(available_themes)
-            self.sub_title = f"Found {theme_count} themes, current: {current_theme}"
-            
-            selected = await self.push_screen_wait(
-                ThemePickerScreen(available_themes, current_theme)
-            )
-            if not selected:
-                return
-                
-            success = self.theme_manager.switch_theme(selected, self)
-            if success:
-                self.sub_title = f"Theme switched to: {selected}"
-                # Refresh message bubbles to apply new theme
-                self._restyle_rendered_bubbles()
-            else:
-                self.sub_title = f"Failed to switch theme: {selected}"
-        except Exception as e:
-            self.sub_title = f"Theme picker error: {str(e)[:50]}"
+        available_themes = self.theme_manager.get_available_themes(self)
+        current_theme = self.theme_manager.current_theme_name
 
-    async def action_test_action(self) -> None:
-        """Test action to verify keybinding system works."""
-        self.sub_title = "Test action triggered! Keybindings are working."
+        self.push_screen(
+            ThemePickerScreen(available_themes, current_theme),
+            callback=self._handle_theme_picker_result,
+        )
 
-    async def _load_conversation_payload(self, payload: dict[str, Any]) -> None:
-        """Apply a loaded conversation payload to the chat and re-render the UI."""
-        try:
-            await self.conversation_manager.load_payload(payload)
-        except Exception:
-            self.sub_title = "Saved conversation format is invalid."
+    def _handle_theme_picker_result(self, selected: str | None) -> None:
+        """Apply theme picker selection."""
+        if not selected:
             return
-        await self._clear_conversation_view()
-        await self._render_messages_from_history(self.chat.messages)
-        self._set_idle_sub_title(f"Loaded conversation for model: {self.chat.model}")
-        self._update_status_bar()
+
+        success = self.theme_manager.switch_theme(selected, self)
+        if not success:
+            self.sub_title = f"Failed to switch theme: {selected}"
+            return
+
+        self.sub_title = f"Theme switched to: {selected}"
+        self._restyle_rendered_bubbles()
 
     async def _load_conversation_from_path(self, path: Path) -> None:
         try:

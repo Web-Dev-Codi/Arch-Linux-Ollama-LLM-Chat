@@ -324,12 +324,16 @@ class ThemePickerScreen(ModalScreen[str | None]):
         background: $background;
     }
 
-    .color-swatch {
-        display: inline-block;
+    #color-swatch-primary,
+    #color-swatch-secondary,
+    #color-swatch-accent,
+    #color-swatch-success,
+    #color-swatch-warning,
+    #color-swatch-error {
         width: 4;
         height: 1;
         margin: 0 1;
-        border: round $text;
+        border: solid red;
     }
 
     #theme-help {
@@ -354,12 +358,12 @@ class ThemePickerScreen(ModalScreen[str | None]):
             with Vertical(id="theme-preview"):
                 yield Static("Theme preview will appear here", id="preview-text")
                 with Horizontal(id="color-swatches"):
-                    yield Static("Primary", classes="color-swatch")
-                    yield Static("Secondary", classes="color-swatch") 
-                    yield Static("Accent", classes="color-swatch")
-                    yield Static("Success", classes="color-swatch")
-                    yield Static("Warning", classes="color-swatch")
-                    yield Static("Error", classes="color-swatch")
+                    yield Static("Primary", id="color-swatch-primary")
+                    yield Static("Secondary", id="color-swatch-secondary")
+                    yield Static("Accent", id="color-swatch-accent")
+                    yield Static("Success", id="color-swatch-success")
+                    yield Static("Warning", id="color-swatch-warning")
+                    yield Static("Error", id="color-swatch-error")
             
             yield Static("Enter/click to select | Esc to cancel", id="theme-help")
 
@@ -371,6 +375,7 @@ class ThemePickerScreen(ModalScreen[str | None]):
             options.highlighted = current_index
         except ValueError:
             pass  # Current theme not in list
+        options.focus()
         self._update_preview()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -384,7 +389,9 @@ class ThemePickerScreen(ModalScreen[str | None]):
         if 0 <= selected_index < len(self._theme_names):
             self.dismiss(self._theme_names[selected_index])
 
-    def on_option_list_highlighted_changed(self, event: OptionList.HighlightedChanged) -> None:
+    def on_option_list_option_highlighted(
+        self, _event: OptionList.OptionHighlighted
+    ) -> None:
         self._update_preview()
 
     def _update_preview(self) -> None:
@@ -418,7 +425,8 @@ class ThemePickerScreen(ModalScreen[str | None]):
             ]
             
             for label, color in colors:
-                swatch = Static(label, classes="color-swatch")
+                swatch_id = f"color-swatch-{label.lower()}"
+                swatch = Static(label, id=swatch_id)
                 swatch.styles.background = color
                 swatch.styles.color = "#ffffff"  # White text for contrast
                 swatches.mount(swatch)
