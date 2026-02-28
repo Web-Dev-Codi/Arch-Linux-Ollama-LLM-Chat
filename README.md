@@ -98,6 +98,7 @@
 - **Export** conversations as Markdown transcripts
 - **Search messages** and cycle through results from the input box
 - **Copy** the latest assistant reply to clipboard in one shortcut
+- **Conversation picker & auto-save** — quickly switch between saved chats (via `/conversations`) with automatic saving enabled by default
 
 ### Capabilities
 
@@ -117,6 +118,8 @@
 - **Structured JSON logging** with optional file output for debugging
 - **Terminal title** and window class set on startup for WM rules
 - **Desktop entry** and Hyprland/Ghostty integration examples included
+- **Slash commands** for actions like `/new`, `/save`, `/load`, `/model`, `/preset`, `/image`, `/file`, `/conversations`, and `/help`
+- **Theme system** with a theme picker (`ctrl+t`), built-in themes (e.g. Textual dark/light, Nord, Gruvbox, Tokyo Night) and customizable color themes with persistence
 
 ---
 
@@ -215,9 +218,9 @@ Use `config.example.toml` from the repo as your starting point.
 ```toml
 [app]
 # Window title shown in the TUI header
-title = "Ollama Chat"
+title = "OllamaTerm"
 # WM window class set on startup (useful for Hyprland/i3 rules)
-class = "ollamaterm-tui"
+class = "ollamaterm"
 # How often (seconds) to check Ollama connectivity
 connection_check_interval_seconds = 15
 
@@ -249,6 +252,29 @@ show_timestamps = true
 # Number of streaming chunks to buffer before rendering
 stream_chunk_size = 8
 
+[theme]
+# Theme selection: "textual-dark", "textual-light", "nord", "gruvbox", "tokyo-night",
+# "monokai", "dracula", "solarized-light", "solarized-dark", "atom-one-dark", "atom-one-light"
+# or "custom" to use the ui colors above
+name = "textual-dark"
+# Persist theme choice across sessions
+persist = true
+# Custom theme definitions (optional)
+[theme.custom]
+# Define custom themes here - example for a "catppuccin" theme:
+# [theme.custom.catppuccin]
+# primary = "#89B4FA"
+# secondary = "#74C7EC"
+# accent = "#F5C2E7"
+# foreground = "#CDD6F4"
+# background = "#1E1E2E"
+# surface = "#313244"
+# panel = "#45475A"
+# success = "#A6E3A1"
+# warning = "#F9E2AF"
+# error = "#F38BA8"
+# dark = true
+
 [keybinds]
 send_message = "ctrl+enter"
 new_conversation = "ctrl+n"
@@ -257,11 +283,13 @@ scroll_up = "ctrl+k"
 scroll_down = "ctrl+j"
 command_palette = "ctrl+p"
 toggle_model_picker = "ctrl+m"
+toggle_theme_picker = "ctrl+t"
 save_conversation = "ctrl+s"
 load_conversation = "ctrl+l"
 export_conversation = "ctrl+e"
 search_messages = "ctrl+f"
 copy_last_message = "ctrl+y"
+interrupt_stream = "escape"
 
 [security]
 # Set true to allow non-localhost Ollama endpoints
@@ -275,7 +303,8 @@ log_to_file = false
 log_file_path = "~/.local/state/ollamaterm/app.log"
 
 [persistence]
-enabled = false
+enabled = true
+auto_save = true
 directory = "~/.local/state/ollamaterm/conversations"
 metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 
@@ -325,11 +354,13 @@ All keybinds are rebindable in `[keybinds]`. These are the defaults:
 | `ctrl+j` | Scroll down |
 | `ctrl+p` | Open command palette |
 | `ctrl+m` | Open model picker |
+| `ctrl+t` | Open theme picker |
 | `ctrl+s` | Save conversation *(requires persistence enabled)* |
 | `ctrl+l` | Load latest saved conversation *(requires persistence enabled)* |
 | `ctrl+e` | Export Markdown transcript *(requires persistence enabled)* |
 | `ctrl+f` | Search messages (press again to cycle results) |
 | `ctrl+y` | Copy last assistant message to clipboard |
+| `escape` | Interrupt a streaming response |
 
 ---
 
@@ -465,7 +496,7 @@ Web search also requires the active model to support tool calling
 
 Automatically active when the model reports `"vision"` in its capabilities
 (e.g. `gemma3`, `llava`). Attach images with `/image <path>` in the input box
-or use the Attach button in the toolbar.
+or use the Attach button in the toolbar. Use `/file <path>` or the file attachment button to include non-image context files.
 
 ### Context window alignment
 
