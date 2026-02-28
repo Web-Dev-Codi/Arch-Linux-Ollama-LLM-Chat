@@ -71,7 +71,7 @@ log_to_file = false
 log_file_path = "~/.local/state/ollamaterm/app.log"
 
 [persistence]
-enabled = false
+enabled = true
 directory = "~/.local/state/ollamaterm/conversations"
 metadata_path = "~/.local/state/ollamaterm/conversations/index.json"
 

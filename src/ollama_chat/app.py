@@ -410,7 +410,8 @@ class OllamaChatApp(App[None]):
         "copy_last_message": "Copy Last",
         "toggle_conversation_picker": "Conversations",
         "toggle_prompt_preset_picker": "Prompt",
-        "toggle_theme_picker": "Theme",
+        "toggle_theme_picker": "Theme (Ctrl+T)",
+        "test_action": "Test",
         "interrupt_stream": "Interrupt",
     }
 
@@ -865,22 +866,33 @@ class OllamaChatApp(App[None]):
 
     async def action_toggle_theme_picker(self) -> None:
         """Open theme picker and apply selection."""
-        available_themes = self.theme_manager.get_available_themes(self)
-        current_theme = self.theme_manager.current_theme_name
-        
-        selected = await self.push_screen_wait(
-            ThemePickerScreen(available_themes, current_theme)
-        )
-        if not selected:
-            return
+        try:
+            available_themes = self.theme_manager.get_available_themes(self)
+            current_theme = self.theme_manager.current_theme_name
             
-        success = self.theme_manager.switch_theme(selected, self)
-        if success:
-            self.sub_title = f"Theme switched to: {selected}"
-            # Refresh message bubbles to apply new theme
-            self._restyle_rendered_bubbles()
-        else:
-            self.sub_title = f"Failed to switch theme: {selected}"
+            # Debug: show available themes
+            theme_count = len(available_themes)
+            self.sub_title = f"Found {theme_count} themes, current: {current_theme}"
+            
+            selected = await self.push_screen_wait(
+                ThemePickerScreen(available_themes, current_theme)
+            )
+            if not selected:
+                return
+                
+            success = self.theme_manager.switch_theme(selected, self)
+            if success:
+                self.sub_title = f"Theme switched to: {selected}"
+                # Refresh message bubbles to apply new theme
+                self._restyle_rendered_bubbles()
+            else:
+                self.sub_title = f"Failed to switch theme: {selected}"
+        except Exception as e:
+            self.sub_title = f"Theme picker error: {str(e)[:50]}"
+
+    async def action_test_action(self) -> None:
+        """Test action to verify keybinding system works."""
+        self.sub_title = "Test action triggered! Keybindings are working."
 
     async def _load_conversation_payload(self, payload: dict[str, Any]) -> None:
         """Apply a loaded conversation payload to the chat and re-render the UI."""
