@@ -5,11 +5,10 @@ import mimetypes
 import os
 from pathlib import Path
 
-from support import file_time as file_time_service
-from support import lsp_client
-
-from .base import Attachment, ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from ..support import file_time as file_time_service
+from ..support import lsp_client
+from .abstracts import FileOperationTool
+from .base import Attachment, ParamsSchema, ToolContext, ToolResult
 
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000
@@ -22,25 +21,13 @@ class ReadParams(ParamsSchema):
     limit: int | None = None  # default DEFAULT_READ_LIMIT
 
 
-class ReadTool(Tool):
+class ReadTool(FileOperationTool):
     id = "read"
     params_schema = ReadParams
 
-    async def execute(self, params: ReadParams, ctx: ToolContext) -> ToolResult:
-        # Resolve absolute path
-        project_dir = Path(str(ctx.extra.get("project_dir", "."))).expanduser().resolve()
-        raw_path = Path(params.file_path)
-        file_path = raw_path if raw_path.is_absolute() else (project_dir / raw_path)
-        file_path = file_path.resolve()
-
-        await assert_external_directory(ctx, str(file_path), bypass=bool(ctx.extra.get("bypassCwdCheck")))
-        await ctx.ask(
-            permission="read",
-            patterns=[str(file_path)],
-            always=["*"],
-            metadata={},
-        )
-
+    async def perform_operation(
+        self, file_path: Path, params: ReadParams, ctx: ToolContext
+    ) -> ToolResult:
         if not file_path.exists():
             parent = file_path.parent
             name = file_path.name.lower()
@@ -74,19 +61,30 @@ class ReadTool(Tool):
                 + "\n".join(lines)
                 + "\n</entries>"
             )
-            return ToolResult(title=str(file_path), output=content, metadata={})
+            return ToolResult(
+                title=str(file_path),
+                output=content,
+                metadata={"ok": True},
+            )
 
         # MIME and attachment handling for images and PDFs
         mime, _ = mimetypes.guess_type(str(file_path))
         try:
-            if mime and (mime.startswith("image/") or mime == "application/pdf") and not mime.endswith("svg+xml") and "vnd.fastbidsheet" not in mime:
+            if (
+                mime
+                and (mime.startswith("image/") or mime == "application/pdf")
+                and not mime.endswith("svg+xml")
+                and "vnd.fastbidsheet" not in mime
+            ):
                 data = file_path.read_bytes()
                 b64 = base64.b64encode(data).decode()
-                attachment = Attachment(type="file", mime=mime, url=f"data:{mime};base64,{b64}")
+                attachment = Attachment(
+                    type="file", mime=mime, url=f"data:{mime};base64,{b64}"
+                )
                 return ToolResult(
                     title=str(file_path),
                     output="Binary attachment returned.",
-                    metadata={"attachment": True},
+                    metadata={"ok": True, "attachment": True},
                     attachments=[attachment],
                 )
         except Exception:
@@ -103,7 +101,9 @@ class ReadTool(Tool):
             if len(sample) > 0 and non_printable / len(sample) > 0.3:
                 raise RuntimeError("Cannot read binary file")
         except Exception as exc:
-            return ToolResult(title=str(file_path), output=str(exc), metadata={"ok": False})
+            return ToolResult(
+                title=str(file_path), output=str(exc), metadata={"ok": False}
+            )
 
         # Read text with offset/limit and byte cap
         offset = max(1, int(params.offset or 1))
@@ -128,7 +128,9 @@ class ReadTool(Tool):
                     total_bytes += len(line.encode("utf-8", errors="ignore"))
                     end_line = i
         except Exception as exc:
-            return ToolResult(title=str(file_path), output=str(exc), metadata={"ok": False})
+            return ToolResult(
+                title=str(file_path), output=str(exc), metadata={"ok": False}
+            )
 
         summary: str
         if end_line < total_lines:
@@ -152,4 +154,4 @@ class ReadTool(Tool):
         except Exception:
             pass
 
-        return ToolResult(title=str(file_path), output=content, metadata={})
+        return ToolResult(title=str(file_path), output=content, metadata={"ok": True})

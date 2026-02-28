@@ -1,5 +1,5 @@
 pkgname=ollamaterm
-pkgver=0.3.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc='Chat TUI for Ollama local LLMs'
 arch=('any')

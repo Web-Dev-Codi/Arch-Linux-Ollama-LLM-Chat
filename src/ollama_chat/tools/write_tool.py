@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from difflib import unified_diff
 from pathlib import Path
 
-from support import bus, lsp_client
-from support import file_time as file_time_service
-
-from .base import ParamsSchema, Tool, ToolContext, ToolResult
-from .external_directory import assert_external_directory
+from ..support import file_time as file_time_service
+from ..support import lsp_client
+from .abstracts import FileOperationTool
+from .base import ParamsSchema, ToolContext, ToolResult
+from .utils import generate_unified_diff
 
 
 class WriteParams(ParamsSchema):
@@ -15,33 +14,19 @@ class WriteParams(ParamsSchema):
     content: str
 
 
-class WriteTool(Tool):
+class WriteTool(FileOperationTool):
     id = "write"
     params_schema = WriteParams
 
-    async def execute(self, params: WriteParams, ctx: ToolContext) -> ToolResult:
-        file_path = Path(params.file_path).expanduser().resolve()
-        await assert_external_directory(ctx, str(file_path))
-
+    async def perform_operation(
+        self, file_path: Path, params: WriteParams, ctx: ToolContext
+    ) -> ToolResult:
         exists = file_path.exists()
         old_content = ""
         if exists:
             old_content = file_path.read_text(encoding="utf-8", errors="replace")
-            try:
-                await file_time_service.assert_read(ctx.session_id, str(file_path))
-            except Exception as exc:
-                return ToolResult(title=str(file_path), output=str(exc), metadata={"ok": False})
 
-        diff_lines = list(
-            unified_diff(
-                old_content.splitlines(),
-                params.content.splitlines(),
-                fromfile=str(file_path),
-                tofile=str(file_path),
-                lineterm="",
-            )
-        )
-        diff_str = "\n".join(diff_lines)
+        diff_str = generate_unified_diff(old_content, params.content, file_path)
         await ctx.ask(
             permission="edit",
             patterns=[str(file_path)],
@@ -56,18 +41,6 @@ class WriteTool(Tool):
         # Serialize concurrent writes
         await file_time_service.with_lock(str(file_path), _write)
 
-        # Events and bookkeeping
-        try:
-            await bus.bus.publish(
-                "file.edited", {"file": str(file_path), "event": "change" if exists else "add"}
-            )
-            await bus.bus.publish(
-                "file.watcher.updated",
-                {"file": str(file_path), "event": "change" if exists else "add"},
-            )
-        except Exception:
-            pass
-
         try:
             file_time_service.record_read(ctx.session_id, str(file_path))
         except Exception:
@@ -81,7 +54,9 @@ class WriteTool(Tool):
         # LSP diagnostics
         try:
             diagnostics = lsp_client.get_diagnostics()
-            errors = [d for d in diagnostics.get(str(file_path), []) if d.get("severity") == 1]
+            errors = [
+                d for d in diagnostics.get(str(file_path), []) if d.get("severity") == 1
+            ]
             other_files = [
                 (p, [d for d in ds if d.get("severity") == 1])
                 for p, ds in diagnostics.items()
@@ -90,14 +65,22 @@ class WriteTool(Tool):
             other_files = [(p, es) for p, es in other_files if es][:5]
             output = "Wrote file successfully."
             if errors:
-                output += "\n<diagnostics>\n" + "\n".join(d.get("message", "") for d in errors[:20]) + "\n</diagnostics>"
+                output += (
+                    "\n<diagnostics>\n"
+                    + "\n".join(d.get("message", "") for d in errors[:20])
+                    + "\n</diagnostics>"
+                )
             for p, es in other_files:
                 output += (
-                    f"\n<diagnostics file=\"{p}\">\n"
+                    f'\n<diagnostics file="{p}">\n'
                     + "\n".join(d.get("message", "") for d in es[:20])
                     + "\n</diagnostics>"
                 )
         except Exception:
             output = "Wrote file successfully."
 
-        return ToolResult(title=str(file_path), output=output, metadata={"changed": True})
+        return ToolResult(
+            title=str(file_path),
+            output=output,
+            metadata={"ok": True, "changed": True, "event": "change" if exists else "create"},
+        )

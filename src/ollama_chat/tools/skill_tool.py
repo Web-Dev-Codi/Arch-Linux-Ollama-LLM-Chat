@@ -17,11 +17,11 @@ class SkillTool(Tool):
     def _skill_dirs(self, ctx: ToolContext) -> list[Path]:
         dirs: list[Path] = []
         dirs.append(Path.home() / ".config" / "opencode" / "skills")
-        project = Path(str(ctx.extra.get("project_dir", "."))).expanduser().resolve()
+        project = ctx.project_root
         dirs.append(project / ".opencode" / "skills")
         for extra in ctx.extra.get("skill_dirs", []) or []:
             try:
-                p = Path(str(extra)).expanduser().resolve()
+                p = ctx.resolve_path(str(extra))
                 dirs.append(p)
             except Exception:
                 continue
@@ -91,7 +91,7 @@ class SkillTool(Tool):
 
         base_url = skill_dir.as_uri()
         body = (
-            f"<skill_content name=\"{name}\">\n"
+            f'<skill_content name="{name}">\n'
             f"# Skill: {name}\n\n{content}\n\n"
             f"Base directory: {base_url}\n"
             "Relative paths are relative to this base directory.\n\n"
@@ -99,4 +99,6 @@ class SkillTool(Tool):
             + "\n".join(f"<file>{f}</file>" for f in files)
             + "\n</skill_files>\n</skill_content>"
         )
-        return ToolResult(title=f"skill: {name}", output=body, metadata={"description": desc})
+        return ToolResult(
+            title=f"skill: {name}", output=body, metadata={"description": desc}
+        )

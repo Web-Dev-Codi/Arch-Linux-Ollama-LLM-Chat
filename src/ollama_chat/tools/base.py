@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -15,7 +16,7 @@ from .truncation import truncate_output
 class Attachment:
     type: str  # "file"
     mime: str
-    url: str   # data:<mime>;base64,<b64> or https://...
+    url: str  # data:<mime>;base64,<b64> or https://...
 
 
 @dataclass
@@ -68,6 +69,64 @@ class ToolContext:
         """Return a shallow-copied context with a different call_id."""
         return replace(self, call_id=call_id)
 
+    @property
+    def project_root(self) -> Path:
+        """Get resolved project directory.
+
+        Replaces 16+ duplicate Path(...).expanduser().resolve() calls.
+        Added during Phase 1.2 refactoring.
+        """
+        from pathlib import Path
+
+        root = self.extra.get("project_dir", ".")
+        return Path(str(root)).expanduser().resolve()
+
+    def resolve_path(self, path: str | Path) -> Path:
+        """Resolve path relative to project root.
+
+        Args:
+            path: Absolute or relative path
+
+        Returns:
+            Resolved absolute path
+
+        Added during Phase 1.2 refactoring to eliminate duplicate path resolution.
+        """
+        from pathlib import Path
+
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            p = self.project_root / p
+        return p.resolve()
+
+    async def check_permission(
+        self,
+        operation: str,
+        paths: list[Path],
+        *,
+        allow_workspace: bool = True,
+    ) -> None:
+        """Centralized permission checks for tool operations."""
+        from .external_directory import assert_external_directory
+
+        project_root = self.project_root
+        for path in paths:
+            resolved = path.resolve()
+            if allow_workspace:
+                try:
+                    resolved.relative_to(project_root)
+                    continue
+                except Exception:
+                    pass
+
+            await assert_external_directory(self, str(resolved))
+            await self.ask(
+                permission=operation,
+                patterns=[str(resolved)],
+                always=["*"],
+                metadata={"operation": operation, "path": str(resolved)},
+            )
+
 
 class ParamsSchema(BaseModel):
     """Base class for all tool parameter schemas."""
@@ -96,15 +155,70 @@ class Tool(ABC):
     params_schema: type[ParamsSchema]
 
     @abstractmethod
-    async def execute(self, params: ParamsSchema, ctx: ToolContext) -> ToolResult:  # pragma: no cover - interface only
+    async def execute(
+        self, params: ParamsSchema, ctx: ToolContext
+    ) -> ToolResult:  # pragma: no cover - interface only
         ...
 
+    @cached_property
+    def _schema_cache(self) -> dict[str, Any]:
+        """Cached schema generation - computed once per tool instance."""
+        raw_schema = self.params_schema.model_json_schema()
+        return self._clean_pydantic_schema(raw_schema)
+
+    @staticmethod
+    def _clean_pydantic_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        """Remove Pydantic-specific fields that Ollama doesn't need."""
+        # Remove top-level keys Ollama ignores
+        cleaned = {
+            k: v
+            for k, v in schema.items()
+            if k not in ("$defs", "title", "$schema", "definitions")
+        }
+
+        # Ensure required fields exist
+        cleaned.setdefault("type", "object")
+        cleaned.setdefault("properties", {})
+        cleaned.setdefault("required", [])
+
+        # Ollama expects additionalProperties to be present
+        cleaned.setdefault("additionalProperties", True)
+
+        return cleaned
+
     def schema(self) -> dict:
-        """Return the OpenAI function-calling schema for this tool."""
+        """Return the inner function schema (legacy method - DEPRECATED).
+
+        Use to_ollama_schema() instead for proper Ollama format.
+        This method is kept for backward compatibility but will be removed
+        in a future version.
+        """
         return {
             "name": self.id,
             "description": self.description,
-            "parameters": self.params_schema.model_json_schema(),
+            "parameters": self._schema_cache,
+        }
+
+    def to_ollama_schema(self) -> dict[str, Any]:
+        """Return Ollama-compatible tool schema with proper wrapping.
+
+        Returns:
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool_name",
+                    "description": "...",
+                    "parameters": {...}
+                }
+            }
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.id,
+                "description": self.description,
+                "parameters": self._schema_cache,
+            },
         }
 
     def format_validation_error(self, error: Exception) -> str | None:

@@ -22,10 +22,17 @@ async def assert_external_directory(
         # If the path cannot be resolved, fall back to asking for the parent dir.
         target_path = Path(str(target)).expanduser()
 
-    project_dir_text = str(ctx.extra.get("project_dir", "."))
-    worktree_text = str(ctx.extra.get("worktree", project_dir_text))
-    project_dir = Path(project_dir_text).expanduser().resolve()
-    worktree = Path(worktree_text).expanduser().resolve()
+    # Use ToolContext helpers if available, otherwise fallback to manual resolution
+    try:
+        project_dir = ctx.project_root
+        worktree_text = str(ctx.extra.get("worktree", str(project_dir)))
+        worktree = ctx.resolve_path(worktree_text)
+    except AttributeError:
+        # Fallback for non-ToolContext objects
+        project_dir_text = str(ctx.extra.get("project_dir", "."))
+        worktree_text = str(ctx.extra.get("worktree", project_dir_text))
+        project_dir = Path(project_dir_text).expanduser().resolve()
+        worktree = Path(worktree_text).expanduser().resolve()
 
     # If target is inside project_dir or worktree, no approval required.
     def _inside(root: Path, child: Path) -> bool:

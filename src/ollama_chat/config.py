@@ -188,6 +188,7 @@ class KeybindsConfig(BaseModel):
     scroll_down: str = "ctrl+j"
     command_palette: str = "ctrl+p"
     toggle_model_picker: str = "ctrl+m"
+    toggle_theme_picker: str = "ctrl+t"
     save_conversation: str = "ctrl+s"
     load_conversation: str = "ctrl+l"
     export_conversation: str = "ctrl+e"

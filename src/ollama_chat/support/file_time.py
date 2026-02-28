@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 _state: dict[str, dict[str, datetime]] = {}
@@ -52,4 +53,12 @@ async def with_lock(filepath: str | os.PathLike[str], fn: Callable[[], Any]):
     key = str(Path(filepath).resolve())
     lock = _locks.setdefault(key, asyncio.Lock())
     async with lock:
-        return await fn()
+        return fn()
+
+
+# Backwards-compatible namespace used by older imports.
+file_time_service = SimpleNamespace(
+    record_read=record_read,
+    assert_read=assert_read,
+    with_lock=with_lock,
+)

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import asyncio
+from collections.abc import Callable
+import concurrent.futures
 from dataclasses import dataclass, field
 import logging
 import os
@@ -12,9 +13,9 @@ import threading
 import time
 from typing import Any
 
-from .custom_tools import CustomToolSuite, ToolRuntimeOptions, ToolSpec
 from .exceptions import OllamaToolError
 from .tools.base import ToolContext
+from .tools.truncation import truncate_output
 
 try:
     from ollama import web_fetch as _ollama_web_fetch
@@ -25,10 +26,76 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency.
 
 LOGGER = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class ToolRuntimeOptions:
+    """Runtime limits and safety controls for local tools.
+
+    Moved from custom_tools.py during Phase 1 refactoring.
+    """
+
+    enabled: bool = True
+    workspace_root: str = "."
+    allow_external_directories: bool = False
+    command_timeout_seconds: int = 30
+    max_output_lines: int = 200
+    max_output_bytes: int = 50_000
+    max_read_bytes: int = 200_000
+    max_search_results: int = 200
+    default_external_directories: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """JSON-schema function tool definition + handler.
+
+    Moved from custom_tools.py during Phase 1 refactoring.
+    Provides schema-based tool registration for ToolsPackageAdapter.
+    """
+
+    name: str
+    description: str
+    parameters_schema: dict[str, Any]
+    handler: Callable[[dict[str, Any]], str]
+    safety_level: str = "safe"
+    category: str = "meta"
+
+    def as_ollama_tool(self) -> dict[str, Any]:
+        """Render the tool in Ollama's function schema format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            },
+        }
+
+
 # Serialise all temporary env-var mutations so that concurrent threads
 # (e.g. when tool execution is offloaded via asyncio.to_thread) cannot
 # observe each other's transient OLLAMA_API_KEY value.
 _env_lock = threading.Lock()
+
+
+def _run_async_from_sync(coro):
+    """Run async coroutine from sync context, handling existing event loops.
+
+    If called from within an async context (existing event loop), runs the
+    coroutine in a new thread with its own event loop.
+
+    If called from sync context (no running loop), creates a new event loop.
+    """
+    try:
+        # Check if there's a running loop
+        loop = asyncio.get_running_loop()
+        # We're in an async context - need to run in a new thread with new loop
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    except RuntimeError:
+        # No running loop - safe to create one
+        return asyncio.run(coro)
 
 
 def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
@@ -49,28 +116,6 @@ def _with_temp_env(key: str, value: str, fn: Callable[[], str]) -> str:
                 os.environ[key] = old_value
 
 
-def _truncate_output(text: str, max_lines: int, max_bytes: int) -> tuple[str, bool]:
-    """Apply deterministic truncation by byte and line limits."""
-    truncated = False
-    result = text
-
-    if max_bytes > 0:
-        encoded = result.encode("utf-8", errors="ignore")
-        if len(encoded) > max_bytes:
-            truncated = True
-            clipped = encoded[:max_bytes]
-            result = clipped.decode("utf-8", errors="ignore")
-            result += "\n... [truncated by byte limit]"
-
-    if max_lines > 0:
-        lines = result.splitlines()
-        if len(lines) > max_lines:
-            truncated = True
-            result = "\n".join(lines[:max_lines] + ["... [truncated by line limit]"])
-
-    return result, truncated
-
-
 class ToolsPackageAdapter:
     def __init__(
         self,
@@ -83,27 +128,61 @@ class ToolsPackageAdapter:
         self._metadata_cb = metadata_cb
 
     def to_specs(self) -> list[ToolSpec]:
-        specs: list[ToolSpec] = []
+        """Convert built-in tool classes to ToolSpec objects."""
+        from .tools.registry import get_registry
+
         # Ensure modules that import `from support import ...` can resolve the local
         # package alias (ollama_chat.support) without modifying their import lines.
         try:
             import ollama_chat.support as _support_pkg  # type: ignore[import-not-found]
+
             sys.modules.setdefault("support", _support_pkg)
         except Exception:
             pass
         try:
             from .tools.registry import get_registry  # local/lazy import
+
             tools = get_registry().tools_for_model()
         except Exception:
             tools = []
+        specs = []
         for tool in tools:
             name = getattr(tool, "id", "")
             if not name:
                 continue
+
+            # Use the NEW to_ollama_schema() method which returns proper format
             try:
-                schema = tool.params_schema.model_json_schema()
+                ollama_schema = tool.to_ollama_schema()
+                # Extract the inner function dict for the parameters
+                func_dict = ollama_schema.get("function", {})
+                schema = func_dict.get(
+                    "parameters",
+                    {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": True,
+                    },
+                )
+            except AttributeError:
+                # Fallback to legacy schema() method for old tools
+                try:
+                    legacy = tool.schema()
+                    schema = legacy.get(
+                        "parameters",
+                        {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                        },
+                    )
+                except Exception:
+                    schema = {"type": "object", "properties": {}, "required": []}
             except Exception:
                 schema = {"type": "object", "properties": {}, "required": []}
+
+            # Ensure schema has correct structure
             if schema.get("type") != "object":
                 schema = {
                     "type": "object",
@@ -134,7 +213,7 @@ class ToolsPackageAdapter:
                         result = await t.run(args, ctx)
                         return str(result.output)
 
-                    return asyncio.run(_run())
+                    return _run_async_from_sync(_run())
 
                 return handler
 
@@ -148,6 +227,19 @@ class ToolsPackageAdapter:
                     category="builtin",
                 )
             )
+
+        for spec in list(specs):
+            if spec.name == "todowrite":
+                specs.append(
+                    ToolSpec(
+                        name="todo",
+                        description=spec.description,
+                        parameters_schema=spec.parameters_schema,
+                        handler=spec.handler,
+                        safety_level=spec.safety_level,
+                        category=spec.category,
+                    )
+                )
         return specs
 
 
@@ -184,86 +276,17 @@ class ToolRegistry:
         return sorted(names)
 
     def build_tools_list(self) -> list[Any]:
-        """Return callable and schema tools for passing to the Ollama SDK."""
-        callables = list(self._tools.values())
-        schema_tools = [spec.as_ollama_tool() for spec in self._specs.values()]
-        return callables + schema_tools
-
-    def _validate_value(self, name: str, value: Any, schema: dict[str, Any]) -> None:
-        expected = schema.get("type")
-        if expected is None:
-            return
-
-        if expected == "string":
-            if not isinstance(value, str):
-                raise OllamaToolError(f"Argument {name!r} must be a string.")
-            return
-
-        if expected == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be an integer.")
-            return
-
-        if expected == "number":
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be numeric.")
-            return
-
-        if expected == "boolean":
-            if not isinstance(value, bool):
-                raise OllamaToolError(f"Argument {name!r} must be a boolean.")
-            return
-
-        if expected == "object":
-            if not isinstance(value, dict):
-                raise OllamaToolError(f"Argument {name!r} must be an object.")
-            return
-
-        if expected == "array":
-            if not isinstance(value, list):
-                raise OllamaToolError(f"Argument {name!r} must be an array.")
-            item_schema = schema.get("items")
-            if isinstance(item_schema, dict):
-                for idx, item in enumerate(value):
-                    self._validate_value(f"{name}[{idx}]", item, item_schema)
-            return
-
-    def _validate_schema_arguments(
-        self,
-        schema: dict[str, Any],
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Validate arguments against a constrained JSON schema subset."""
-        if not isinstance(arguments, dict):
-            raise OllamaToolError("Tool arguments must be a JSON object.")
-
-        if schema.get("type") != "object":
-            raise OllamaToolError("Tool schema root must be an object.")
-
-        properties = schema.get("properties", {})
-        if not isinstance(properties, dict):
-            raise OllamaToolError("Tool schema properties must be an object.")
-        required = schema.get("required", [])
-        if not isinstance(required, list):
-            raise OllamaToolError("Tool schema required must be a list.")
-        additional_allowed = bool(schema.get("additionalProperties", False))
-
-        missing = [name for name in required if name not in arguments]
-        if missing:
-            raise OllamaToolError(f"Missing required argument(s): {', '.join(missing)}")
-
-        for arg_name, arg_value in arguments.items():
-            prop_schema = properties.get(arg_name)
-            if prop_schema is None:
-                if additional_allowed:
-                    continue
-                raise OllamaToolError(f"Unknown argument: {arg_name!r}")
-            self._validate_value(arg_name, arg_value, prop_schema)
-
-        return arguments
+        """Return raw callables (legacy) and ToolSpec schemas."""
+        tools: list[Any] = []
+        tools.extend(self._tools.values())
+        tools.extend([spec.as_ollama_tool() for spec in self._specs.values()])
+        return tools
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a named tool and return its string result.
+
+        Schema validation is handled by the ToolSpec handler or Tool.run().
+        This method just coordinates execution and applies output truncation.
 
         Raises OllamaToolError if the tool is unknown or raises an exception.
         This method is synchronous; callers in an async context should use
@@ -273,17 +296,23 @@ class ToolRegistry:
         spec = self._specs.get(name)
         if spec is not None:
             try:
-                validated = self._validate_schema_arguments(
-                    spec.parameters_schema,
-                    arguments,
+                required = spec.parameters_schema.get("required", [])
+                if isinstance(required, list):
+                    missing = [k for k in required if k not in arguments]
+                    if missing:
+                        raise OllamaToolError(
+                            f"Tool {name!r} missing required arguments: {', '.join(missing)}"
+                        )
+
+                result = str(spec.handler(arguments))
+                trunc_result = _run_async_from_sync(
+                    truncate_output(
+                        result,
+                        max_lines=self._runtime_options.max_output_lines,
+                        max_bytes=self._runtime_options.max_output_bytes,
+                    )
                 )
-                result = str(spec.handler(validated))
-                truncated, _ = _truncate_output(
-                    result,
-                    max_lines=self._runtime_options.max_output_lines,
-                    max_bytes=self._runtime_options.max_output_bytes,
-                )
-                return truncated
+                return trunc_result.content
             except OllamaToolError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -292,14 +321,17 @@ class ToolRegistry:
         fn = self._tools.get(name)
         if fn is None:
             raise OllamaToolError(f"Unknown tool requested by model: {name!r}")
+
         try:
             result = str(fn(**arguments))
-            truncated, _ = _truncate_output(
-                result,
-                max_lines=self._runtime_options.max_output_lines,
-                max_bytes=self._runtime_options.max_output_bytes,
+            trunc_result = _run_async_from_sync(
+                truncate_output(
+                    result,
+                    max_lines=self._runtime_options.max_output_lines,
+                    max_bytes=self._runtime_options.max_output_bytes,
+                )
             )
-            return truncated
+            return trunc_result.content
         except OllamaToolError:
             raise
         except Exception as exc:  # noqa: BLE001 - tool functions can fail arbitrarily.
@@ -321,7 +353,6 @@ class ToolRegistryOptions:
     """
 
     web_search_api_key: str | None = None
-    enable_custom_tools: bool = False
     enable_builtin_tools: bool = True
     runtime_options: ToolRuntimeOptions = field(default_factory=ToolRuntimeOptions)
 
@@ -331,8 +362,8 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
 
     - Optional callable-based web_search/web_fetch registration remains for
       backward compatibility.
-    - Optional schema-based custom coding tools are registered when
-      ``enable_custom_tools`` is true.
+    - Built-in tools from tools/ package are registered when
+      ``enable_builtin_tools`` is true (default).
     """
     runtime = options.runtime_options if options is not None else ToolRuntimeOptions()
     registry = ToolRegistry(runtime_options=runtime)
@@ -354,29 +385,13 @@ def build_registry(options: ToolRegistryOptions | None = None) -> ToolRegistry:
             extra={"event": "tools.web_search.enabled"},
         )
 
-    # Register built-in class-based tools first so that custom tools may override
-    # duplicate names when both systems are enabled.
-    builtin_names: set[str] = set()
+    # Register built-in class-based tools from tools/ package
     if options.enable_builtin_tools:
         adapter = ToolsPackageAdapter(options.runtime_options)
         builtin_specs = adapter.to_specs()
         for spec in builtin_specs:
             registry.register_spec(spec)
-            builtin_names.add(spec.name)
 
-    if options.enable_custom_tools:
-        suite = CustomToolSuite(
-            runtime_options=options.runtime_options,
-            web_search_fn=web_search_fn,
-            web_fetch_fn=web_fetch_fn,
-        )
-        suite.bind_executor(registry.execute)
-        for spec in suite.specs():
-            # Prefer built-in implementations for overlapping names in the initial
-            # allowlist (read, edit, grep, codesearch, list). Skip duplicates.
-            if spec.name in builtin_names:
-                continue
-            registry.register_spec(spec)
     return registry
 
 

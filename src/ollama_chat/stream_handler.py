@@ -112,5 +112,7 @@ class StreamHandler:
         """Flush remaining buffer and finalize the bubble content."""
         self.flush_buffer()
         if not self.response_started:
-            self._bubble.set_content("(No response from model.)")
+            self._bubble.set_content(
+                "(No response from model. Check that Ollama is running and the model is available.)"
+            )
         await self._bubble.finalize_content()

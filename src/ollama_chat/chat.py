@@ -9,8 +9,10 @@ import inspect
 import json
 import logging
 import re
+import time
 from typing import Any, Literal
 
+from .capability_cache import CapabilityPersistence, ModelCapabilityCache
 from .exceptions import (
     OllamaChatError,
     OllamaConnectionError,
@@ -38,6 +40,22 @@ except ModuleNotFoundError:  # pragma: no cover - optional runtime detail for lo
     _ollama_pkg = None  # type: ignore[assignment]
 
 LOGGER = logging.getLogger(__name__)
+
+# Tools that are I/O-bound and fast - don't need thread pool overhead
+# These tools complete quickly (<10ms) and don't block the event loop
+FAST_SYNC_TOOLS = {
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    "ls",
+    "list",
+    "invalid",
+    "question",
+    "todo_read",
+    "todo_write",
+}
 
 
 @dataclass
@@ -135,6 +153,11 @@ class OllamaChat:
         except Exception:
             self._chat_param_names = set()
 
+        # Capability caching for auto-filtering based on model support
+        self._capability_persistence = CapabilityPersistence()
+        self._current_capability_cache: ModelCapabilityCache | None = None
+        self._formatted_tools_cache: list[dict[str, Any]] | None = None
+
         try:
             sdk_version = (
                 getattr(_ollama_pkg, "__version__", "unknown")
@@ -166,12 +189,17 @@ class OllamaChat:
         self.message_store.replace_messages(messages)
 
     def set_model(self, model_name: str) -> None:
-        """Update the active model name."""
+        """Update the active model name and invalidate caches."""
         normalized = model_name.strip()
-        if normalized:
+        if normalized and normalized != self.model:
             self.model = normalized
+            # Invalidate capability and tools caches when model changes
+            self._current_capability_cache = None
+            self._formatted_tools_cache = None
 
-    async def send(self, user_message: str, options: ChatSendOptions | None = None) -> AsyncGenerator[ChatChunk, None]:
+    async def send(
+        self, user_message: str, options: ChatSendOptions | None = None
+    ) -> AsyncGenerator[ChatChunk, None]:
         """Two-parameter alternative to ``send_message`` using typed options.
 
         Implemented as an async generator that yields from ``send_message`` so
@@ -506,42 +534,124 @@ class OllamaChat:
             f"Failed to stream response from Ollama at {self.host}: {exc}"
         )
 
+    async def _ensure_capability_cache(
+        self, tool_registry: Any | None = None
+    ) -> ModelCapabilityCache:
+        """Ensure we have fresh capability metadata for current model.
+
+        Returns cached data if available and fresh, otherwise fetches from /api/show.
+        """
+        # Check if we already have a fresh cache for this model
+        if self._current_capability_cache is not None:
+            if self._current_capability_cache.model_name == self.model:
+                return self._current_capability_cache
+
+        # Try persistent cache first
+        cached = self._capability_persistence.get(self.model, max_age_seconds=86400)
+        if cached is not None:
+            self._current_capability_cache = cached
+            LOGGER.info(
+                "capability_cache.hit",
+                extra={
+                    "event": "capability_cache.hit",
+                    "model": self.model,
+                },
+            )
+            return cached
+
+        # Fetch from Ollama
+        LOGGER.info(
+            "capability_cache.miss",
+            extra={
+                "event": "capability_cache.miss",
+                "model": self.model,
+            },
+        )
+
+        caps_report = await self.show_model_capabilities()
+
+        # Build cache entry
+        cache = ModelCapabilityCache(
+            model_name=self.model,
+            supports_tools="tools" in caps_report.caps if caps_report.known else True,
+            supports_vision="vision" in caps_report.caps if caps_report.known else True,
+            supports_thinking="thinking" in caps_report.caps
+            if caps_report.known
+            else True,
+            raw_capabilities=list(caps_report.caps),
+            timestamp=time.time(),
+        )
+
+        # Store in memory and persist
+        self._current_capability_cache = cache
+        self._capability_persistence.set(cache)
+
+        # Invalidate formatted tools cache since capabilities changed
+        self._formatted_tools_cache = None
+
+        return cache
+
+    def _format_tools_for_model(self, tool_registry: Any) -> list[dict[str, Any]]:
+        """Format tools once and cache the result."""
+        if self._formatted_tools_cache is not None:
+            return self._formatted_tools_cache
+
+        if tool_registry is None or tool_registry.is_empty:
+            self._formatted_tools_cache = []
+            return []
+
+        # Get tools using build_tools_list() method
+        formatted = tool_registry.build_tools_list()
+        self._formatted_tools_cache = formatted
+
+        return formatted
+
     async def _stream_once_with_capabilities(
         self,
         request_messages: list[dict[str, Any]],
-        tools: list[Any],
+        tool_registry: Any | None,
         think: bool,
     ) -> AsyncGenerator[ChatChunk, None]:
-        """Stream a single chat turn, yielding typed ChatChunk objects.
+        """Stream a single chat turn with automatic capability filtering.
 
-        Yields thinking, content, and tool_call chunks as they arrive.
+        Only includes tools, think, etc. if the model supports them based on
+        the /api/show capabilities response.
 
-        ``num_ctx`` is always forwarded in ``options`` so that Ollama's
-        server-side context window matches the client-side trim budget.
+        Args:
+            request_messages: Message history to send
+            tool_registry: ToolRegistry instance (not a formatted list anymore)
+            think: Whether to request thinking traces
 
-        GPT-OSS ignores boolean ``think`` values and requires a string level
-        (``"low"``/``"medium"``/``"high"``); this is detected by model name.
+        Yields:
+            ChatChunk objects for thinking, content, and tool_calls
         """
+        # Ensure we have capability metadata
+        caps = await self._ensure_capability_cache(tool_registry)
+
+        # Build base kwargs
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": request_messages,
             "stream": True,
-            # Align Ollama's context window with the client-side trim budget so
-            # longer histories aren't silently truncated server-side.
+            # Align Ollama's context window with client-side trim budget
             "options": {"num_ctx": self.max_context_tokens},
         }
-        if think:
-            # GPT-OSS ignores boolean think; send the string level instead.
+
+        # Only add 'think' if model supports it
+        if think and caps.supports_thinking:
             if "gpt-oss" in self.model.lower():
                 kwargs["think"] = "medium"
             else:
                 kwargs["think"] = True
-        if tools:
-            kwargs["tools"] = tools
 
-        # Only strip optional kwargs when we *know* the SDK doesn't accept them.
-        # If signature introspection failed (empty set), keep kwargs so tests and
-        # newer SDK versions can still receive them.
+        # Only add 'tools' if model supports them
+        formatted_tools: list[dict[str, Any]] = []
+        if tool_registry and caps.supports_tools:
+            formatted_tools = self._format_tools_for_model(tool_registry)
+            if formatted_tools:
+                kwargs["tools"] = formatted_tools
+
+        # Strip kwargs the SDK doesn't accept (for older ollama versions)
         if self._chat_param_names:
             if "think" not in self._chat_param_names:
                 kwargs.pop("think", None)
@@ -560,19 +670,26 @@ class OllamaChat:
 
             chunk_tool_calls = self._extract_chunk_tool_calls(chunk)
 
-            # If the model printed a JSON tool call in content (no structured field),
-            # parse it and treat it as a tool_call so the agent loop can proceed.
-            if not chunk_tool_calls and tools and content_text:
+            # Only parse inline tool calls if model supports tools and we sent them
+            if (
+                not chunk_tool_calls
+                and caps.supports_tools
+                and formatted_tools
+                and content_text
+            ):
                 allowed: set[str] = set()
-                for t in tools:
+                for t in formatted_tools:
                     if isinstance(t, dict):
                         fn = t.get("function", {})
                         if isinstance(fn, dict):
                             n = fn.get("name")
                             if isinstance(n, str) and n:
                                 allowed.add(n)
-                for tc in self._parse_inline_tool_call_from_content(content_text, allowed):
+                for tc in self._parse_inline_tool_call_from_content(
+                    content_text, allowed
+                ):
                     chunk_tool_calls.append(tc)
+
             for tc in chunk_tool_calls:
                 name, args, index = self._parse_tool_call(tc)
                 if name:
@@ -660,13 +777,10 @@ class OllamaChat:
             request_messages[-1] = dict(request_messages[-1])
             request_messages[-1]["images"] = list(images)
 
-        tools: list[Any] = []
-        if tool_registry is not None and not tool_registry.is_empty:
-            tools = tool_registry.build_tools_list()
-
         # Accumulated assistant message parts (for history persistence).
-        accumulated_thinking = ""
-        accumulated_content = ""
+        # Use lists for efficient string building instead of += concatenation
+        accumulated_thinking_parts: list[str] = []
+        accumulated_content_parts: list[str] = []
         accumulated_tool_calls: list[dict[str, Any]] = []
 
         # Track the most-recent iteration's content so that if max_tool_iterations
@@ -679,13 +793,13 @@ class OllamaChat:
                 for attempt in range(self.retries + 1):
                     try:
                         async for chunk in self._stream_once_with_capabilities(
-                            request_messages, tools, think
+                            request_messages, tool_registry, think
                         ):
                             if chunk.kind == "thinking":
-                                accumulated_thinking += chunk.text
+                                accumulated_thinking_parts.append(chunk.text)
                                 yield chunk
                             elif chunk.kind == "content":
-                                accumulated_content += chunk.text
+                                accumulated_content_parts.append(chunk.text)
                                 yield chunk
                             elif chunk.kind == "tool_call":
                                 accumulated_tool_calls.append(
@@ -705,9 +819,7 @@ class OllamaChat:
                         raise
                     except OllamaToolError:
                         raise
-                    except (
-                        Exception
-                    ) as exc:  # noqa: BLE001 - external API can fail in many ways.
+                    except Exception as exc:  # noqa: BLE001 - external API can fail in many ways.
                         mapped_exc = self._map_exception(exc)
                         LOGGER.warning(
                             "chat.request.retry",
@@ -741,6 +853,10 @@ class OllamaChat:
                     fn_entry["index"] = tc["index"] if tc["index"] is not None else seq
                     tool_call_entries.append({"type": "function", "function": fn_entry})
 
+                # Join accumulated parts for API message
+                accumulated_content = "".join(accumulated_content_parts)
+                accumulated_thinking = "".join(accumulated_thinking_parts)
+
                 assistant_turn: dict[str, Any] = {
                     "role": "assistant",
                     "content": accumulated_content,
@@ -750,7 +866,9 @@ class OllamaChat:
                     assistant_turn["thinking"] = accumulated_thinking
                 request_messages.append(assistant_turn)
 
-                # Execute each tool call off the event loop to avoid blocking the TUI.
+                # Execute each tool call.
+                # Fast I/O-bound tools run directly (no thread pool overhead).
+                # Slow/CPU-intensive tools run in thread pool to avoid blocking.
                 for tc in accumulated_tool_calls:
                     tool_name = tc["name"]
                     tool_args = tc["args"]
@@ -763,11 +881,19 @@ class OllamaChat:
                         },
                     )
                     try:
-                        result = await asyncio.to_thread(
-                            tool_registry.execute,
-                            tool_name,
-                            tool_args,  # type: ignore[union-attr]
-                        )
+                        # Fast I/O-bound tools run directly
+                        if tool_name in FAST_SYNC_TOOLS:
+                            result = tool_registry.execute(
+                                tool_name,
+                                tool_args,  # type: ignore[union-attr]
+                            )
+                        else:
+                            # Slow/CPU-intensive tools run in thread pool
+                            result = await asyncio.to_thread(
+                                tool_registry.execute,
+                                tool_name,
+                                tool_args,  # type: ignore[union-attr]
+                            )
                     except OllamaToolError as exc:
                         result = f"[Tool error: {exc}]"
                         LOGGER.warning(
@@ -792,8 +918,8 @@ class OllamaChat:
                 _last_iteration_content = accumulated_content
 
                 # Reset accumulators for the next agent-loop iteration.
-                accumulated_thinking = ""
-                accumulated_content = ""
+                accumulated_thinking_parts.clear()
+                accumulated_content_parts.clear()
                 accumulated_tool_calls = []
 
         except BaseException:
@@ -807,5 +933,6 @@ class OllamaChat:
         # Persist the final assistant response (text only) to history.
         # If the loop was exhausted (all iterations had tool calls), fall back to
         # the last content that was streamed to the UI but then reset.
-        final_response = (accumulated_content or _last_iteration_content).strip()
+        final_content = "".join(accumulated_content_parts)
+        final_response = (final_content or _last_iteration_content).strip()
         self.message_store.append("assistant", final_response)
