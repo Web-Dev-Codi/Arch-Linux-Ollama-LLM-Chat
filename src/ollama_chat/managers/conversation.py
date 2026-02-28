@@ -1,7 +1,6 @@
 """Conversation management and persistence.
 
 Handles conversation save/load, auto-save, and history management.
-Extracted from OllamaChatApp during Phase 2.3 refactoring.
 
 Integration required in app.py:
 - Replace _load_conversation_* methods

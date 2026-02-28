@@ -1,19 +1,5 @@
 """Connection state management.
 
-Proof-of-concept manager extracted from app.py to demonstrate
-the manager pattern for reducing god class complexity.
-
-Full implementation would require:
-- Integrating with app.py lifecycle
-- Handling state change callbacks
-- Managing the monitoring task
-- ~150 LOC total
-
-This is a Phase 2 foundation - full extraction would continue with:
-- CapabilityManager
-- ConversationManager
-- CommandHandler
-- ThemeManager
 """
 
 from __future__ import annotations
@@ -30,12 +16,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ConnectionManager:
-    """Manages connection state and monitoring.
-
-    Extracted from OllamaChatApp to reduce god class complexity.
-    This demonstrates the pattern - full integration requires
-    refactoring app.py to use this manager.
-    """
+    """Manages connection state and monitoring."""
 
     def __init__(
         self,

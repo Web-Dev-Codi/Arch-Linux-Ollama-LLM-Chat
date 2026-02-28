@@ -1,7 +1,6 @@
 """Model capability management.
 
 Manages detection and tracking of model capabilities (tools, vision, thinking).
-Extracted from OllamaChatApp during Phase 2.2 refactoring.
 """
 
 from __future__ import annotations
@@ -23,8 +22,6 @@ class CapabilityManager:
     - Model capabilities (from Ollama /api/show)
     - User preferences (from config)
     - Effective capabilities (intersection of both)
-
-    Extracted from app.py to reduce god class complexity.
     """
 
     def __init__(

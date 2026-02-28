@@ -1,6 +1,5 @@
 """Message rendering and bubble management.
 
-Extracted from app.py during Phase 2B refactoring.
 Handles message bubble creation, styling, and conversation history rendering.
 """
 
@@ -25,8 +24,6 @@ class MessageRenderer:
     - Rendering conversation history
     - Clearing conversation view
     - Timestamp generation
-
-    Extracted from OllamaChatApp to improve separation of concerns.
     """
 
     def __init__(

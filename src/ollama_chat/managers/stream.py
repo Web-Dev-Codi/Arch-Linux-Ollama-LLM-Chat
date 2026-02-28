@@ -1,6 +1,5 @@
 """Stream management for assistant responses.
 
-Extracted from app.py during Phase 2B refactoring to reduce god class complexity.
 Handles streaming responses, placeholder animation, error handling, and interruption.
 """
 
@@ -25,8 +24,6 @@ class StreamManager:
     - Streaming chunk processing
     - Error handling and recovery
     - Stream interruption/cancellation
-
-    Extracted from OllamaChatApp to reduce complexity and improve testability.
     """
 
     PLACEHOLDER_FRAMES: tuple[str, ...] = (

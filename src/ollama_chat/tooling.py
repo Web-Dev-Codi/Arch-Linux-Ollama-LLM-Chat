@@ -29,10 +29,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ToolRuntimeOptions:
-    """Runtime limits and safety controls for local tools.
-
-    Moved from custom_tools.py during Phase 1 refactoring.
-    """
+    """Runtime limits and safety controls for local tools."""
 
     enabled: bool = True
     workspace_root: str = "."
@@ -49,7 +46,6 @@ class ToolRuntimeOptions:
 class ToolSpec:
     """JSON-schema function tool definition + handler.
 
-    Moved from custom_tools.py during Phase 1 refactoring.
     Provides schema-based tool registration for ToolsPackageAdapter.
     """
 

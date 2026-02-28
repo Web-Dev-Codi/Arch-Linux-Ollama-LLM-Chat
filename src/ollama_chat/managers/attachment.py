@@ -1,6 +1,5 @@
 """Attachment handling for images and files.
 
-Extracted from app.py during Phase 2B refactoring.
 Manages file/image attachment dialogs, validation, and state management.
 """
 
@@ -30,8 +29,6 @@ class AttachmentManager:
     - Validating attachments (size, type, existence)
     - Managing attachment state
     - Image/file path validation
-
-    Extracted from OllamaChatApp to separate attachment concerns.
     """
 
     def __init__(

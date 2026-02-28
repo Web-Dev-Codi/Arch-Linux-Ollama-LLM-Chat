@@ -1,8 +1,4 @@
-"""Common utilities for tool implementations.
-
-This module provides shared functionality to eliminate code duplication across tools.
-Extracted during Phase 1.2 refactoring.
-"""
+"""Common utilities for tool implementations."""
 
 from __future__ import annotations
 

@@ -1,8 +1,5 @@
 """Event bus for decoupled component communication.
 
-Phase 4.1 implementation - allows components to communicate without
-tight coupling via publish/subscribe pattern.
-
 Usage:
     bus = EventBus()
 

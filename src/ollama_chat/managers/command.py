@@ -1,8 +1,6 @@
 """Slash command handling and menu UI management.
 
 Processes and executes slash commands like /image, /file, /new, etc.
-Extracted from OllamaChatApp during Phase 2.4 refactoring.
-Expanded during Phase 2B to include menu UI management.
 
 Integration required in app.py:
 - Replace inline command processing in _handle_send()

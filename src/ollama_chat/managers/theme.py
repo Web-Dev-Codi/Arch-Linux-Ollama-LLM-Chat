@@ -16,8 +16,9 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from platformdirs import user_config_path
 from typing import TYPE_CHECKING
+
+from platformdirs import user_config_path
 
 if TYPE_CHECKING:
     from textual.app import App

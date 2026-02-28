@@ -3,18 +3,6 @@
 These classes provide reusable patterns for tool implementation,
 eliminating duplication and enforcing consistency.
 
-Phase 3 foundation - full implementation would require refactoring
-existing tools to inherit from these base classes.
-
-Usage:
-    class MyTool(FileOperationTool):
-        id = "mytool"
-        params_schema = MyParams
-
-        async def perform_operation(self, file_path, params, ctx):
-            # Just implement the core logic
-            # Base class handles path resolution, safety, notifications
-            ...
 """
 
 from __future__ import annotations
@@ -48,20 +36,6 @@ class FileOperationTool(Tool):
     - Consistent error handling
 
     Subclasses only implement perform_operation() with core logic.
-
-    Example:
-        class MyTool(FileOperationTool):
-            id = "mytool"
-            params_schema = MyParams
-
-            async def perform_operation(self, file_path, params, ctx):
-                content = file_path.read_text()
-                # ... process content ...
-                return ToolResult(
-                    title=str(file_path),
-                    output=result,
-                    metadata={"ok": True}
-                )
     """
 
     async def execute(

@@ -414,7 +414,6 @@ class OllamaChatApp(App[None]):
         "interrupt_stream": "Interrupt",
     }
 
-    # RESPONSE_PLACEHOLDER_FRAMES moved to StreamManager (Phase 2B)
 
     def __init__(self) -> None:
         self.config = load_config()
@@ -559,7 +558,6 @@ class OllamaChatApp(App[None]):
             app_author=str(self.config["app"]["class"])
         )
 
-        # Phase 2B managers - extracted to reduce god class complexity
         self.stream_manager = StreamManager(
             self.chat,
             self.state,

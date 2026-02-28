@@ -1,6 +1,5 @@
 """Plugin interface and manager.
 
-Phase 4.2 implementation - allows dynamic loading of tools and extensions.
 
 Usage:
     # Define a plugin
@@ -70,6 +69,7 @@ class Plugin(ABC):
         """
         return {}
 
+    @abstractmethod
     def shutdown(self) -> None:
         """Clean up plugin resources."""
         pass

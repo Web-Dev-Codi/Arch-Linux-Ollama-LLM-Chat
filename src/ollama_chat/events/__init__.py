@@ -1,7 +1,4 @@
-"""Event-driven architecture components.
-
-Phase 4.1: Event bus system for decoupled component communication.
-"""
+"""Event-driven architecture components."""
 
 from .bus import Event, EventBus
 
